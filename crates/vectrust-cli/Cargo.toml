@@ -1,0 +1,25 @@
+[package]
+name = "vectrust-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vectrust"
+path = "src/main.rs"
+
+[dependencies]
+vectrust-core = { path = "../vectrust-core" }
+vectrust-storage = { path = "../vectrust-storage" }
+vectrust-index = { path = "../vectrust-index" }
+vectrust-query = { path = "../vectrust-query" }
+clap = { version = "4.4", features = ["derive"] }
+tokio.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+indicatif = "0.17"
+console = "0.15"
+dialoguer = "0.11"

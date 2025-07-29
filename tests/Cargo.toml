@@ -1,0 +1,15 @@
+[package]
+name = "integration-tests"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "integration_tests"
+path = "integration/mod.rs"
+
+[dependencies]
+vectrust = { path = "../crates/vectrust" }
+tokio = { version = "1.35", features = ["full", "test-util"] }
+uuid = "1.6"
+serde_json = "1.0"
+tempfile = "3.8"

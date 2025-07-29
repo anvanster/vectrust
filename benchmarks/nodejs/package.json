@@ -1,0 +1,27 @@
+{
+  "name": "vectra-nodejs-benchmarks",
+  "version": "1.0.0",
+  "description": "Comprehensive benchmarks for vectra-enhanced (Node.js)",
+  "main": "index.js",
+  "scripts": {
+    "test": "node index.js",
+    "benchmark": "node index.js",
+    "benchmark:index": "node index.js --benchmark index",
+    "benchmark:items": "node index.js --benchmark items", 
+    "benchmark:search": "node index.js --benchmark search",
+    "benchmark:scale": "node index.js --benchmark scale",
+    "install-vectra": "npm install vectra-enhanced"
+  },
+  "dependencies": {
+    "vectra-enhanced": "^1.0.0",
+    "uuid": "^9.0.0",
+    "commander": "^11.0.0",
+    "cli-progress": "^3.12.0",
+    "fs-extra": "^11.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  },
+  "author": "Vectra Benchmark Suite",
+  "license": "MIT"
+}

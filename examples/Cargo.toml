@@ -1,0 +1,17 @@
+[package]
+name = "examples"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "basic"
+path = "basic.rs"
+
+[dependencies]
+vectrust = { path = "../crates/vectrust" }
+uuid = "1.6"
+tokio = { version = "1.35", features = ["full"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3.8"

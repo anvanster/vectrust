@@ -1,0 +1,31 @@
+{
+  "name": "@vectrust/rust",
+  "version": "0.1.0",
+  "description": "High-performance Rust implementation of Vectrust",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "vectrust",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "x86_64-unknown-linux-musl",
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl",
+        "aarch64-pc-windows-msvc"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">= 14"
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "node test/test.js"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.14.0"
+  }
+}

@@ -1,0 +1,24 @@
+[package]
+name = "vectrust-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+smallvec = "1.11"
+parking_lot = "0.12"
+tokio = { version = "1.35", features = ["sync"] }
+async-trait = "0.1"
+rocksdb.workspace = true
+bincode.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
