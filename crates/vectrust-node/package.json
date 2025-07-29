@@ -1,9 +1,29 @@
 {
-  "name": "@vectrust/rust",
-  "version": "0.1.0",
-  "description": "High-performance Rust implementation of Vectrust",
+  "name": "vectrust",
+  "version": "0.1.1",
+  "description": "High-performance Rust implementation of Vectrust vector database",
   "main": "index.js",
   "types": "index.d.ts",
+  "author": "Andrey Vasilevsky",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anvanster/vectrust.git",
+    "directory": "crates/vectrust-node"
+  },
+  "keywords": [
+    "vector",
+    "database",
+    "search",
+    "similarity",
+    "rust",
+    "napi"
+  ],
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ],
   "napi": {
     "name": "vectrust",
     "triples": {
@@ -26,6 +46,7 @@
     "test": "node test/test.js"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^2.14.0"
+    "@napi-rs/cli": "^2.14.0",
+    "uuid": "^11.1.0"
   }
 }

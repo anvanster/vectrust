@@ -47,7 +47,7 @@ vectrust = "0.1.0"
 
 ### Node.js
 ```bash
-npm install @vectrust/rust
+npm install vectrust
 ```
 
 ## 🔧 Quick Start
@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
 ### Node.js API
 
 ```javascript
-const { LocalIndex } = require('@vectrust/rust');
+const { LocalIndex } = require('vectrust');
 
 async function example() {
     // Create index
