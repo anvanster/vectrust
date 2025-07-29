@@ -1,6 +1,3 @@
-use vectrust::*;
-use tempfile::TempDir;
-use uuid::Uuid;
 
 #[tokio::test]
 async fn test_create_and_query_index() -> Result<()> {
