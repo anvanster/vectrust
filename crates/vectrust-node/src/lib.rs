@@ -1,6 +1,6 @@
 use napi_derive::napi;
 use napi::{Result, Error};
-use vectrust_core::{LocalIndex as RustLocalIndex, VectorItem, CreateIndexConfig, ListOptions};
+use vectrust::{LocalIndex as RustLocalIndex, VectorItem, CreateIndexConfig, ListOptions};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;

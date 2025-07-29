@@ -15,6 +15,13 @@ pub trait StorageBackend: Send + Sync {
     async fn create_index(&mut self, config: &CreateIndexConfig) -> Result<()>;
     async fn get_item(&self, id: &uuid::Uuid) -> Result<Option<VectorItem>>;
     async fn insert_item(&mut self, item: &VectorItem) -> Result<()>;
+    async fn insert_items(&mut self, items: &[VectorItem]) -> Result<()> {
+        // Default implementation - can be overridden for better performance
+        for item in items {
+            self.insert_item(item).await?;
+        }
+        Ok(())
+    }
     async fn update_item(&mut self, item: &VectorItem) -> Result<()>;
     async fn delete_item(&mut self, id: &uuid::Uuid) -> Result<()>;
     async fn list_items(&self, options: Option<ListOptions>) -> Result<Vec<VectorItem>>;
@@ -71,14 +78,31 @@ pub struct LocalIndex {
 }
 
 impl LocalIndex {
-    /// Creates a new LocalIndex instance
-    /// Maintains exact Node.js constructor compatibility
+    /// Creates a new LocalIndex instance with a provided storage backend
+    pub fn with_storage(
+        folder_path: impl AsRef<Path>, 
+        index_name: Option<String>,
+        storage: Box<dyn StorageBackend>
+    ) -> Result<Self> {
+        let path = folder_path.as_ref().to_path_buf();
+        let index_name = index_name.unwrap_or_else(|| "index.json".to_string());
+        
+        Ok(Self {
+            path,
+            index_name,
+            storage: Arc::new(RwLock::new(storage)),
+            config: Arc::new(RwLock::new(None)),
+        })
+    }
+    
+    /// Creates a new LocalIndex instance (legacy API, requires storage dependency)
+    /// This will be deprecated - use with_storage instead
     pub fn new<P: AsRef<Path>>(folder_path: P, index_name: Option<String>) -> Result<Self> {
         let path = folder_path.as_ref().to_path_buf();
         let index_name = index_name.unwrap_or_else(|| "index.json".to_string());
         
-        // Auto-detect storage backend based on existing format
-        // This will be implemented when we can access vectra_storage from vectra_core
+        // Use dummy storage for backward compatibility
+        // Real implementations should use with_storage() method
         let storage = create_dummy_storage();
         
         Ok(Self {
@@ -271,7 +295,7 @@ fn merge_json(target: &mut serde_json::Value, source: serde_json::Value) {
     }
 }
 
-// Dummy storage implementation for compilation
+// Dummy storage implementation for backward compatibility
 struct DummyStorage;
 
 #[async_trait]
@@ -301,3 +325,4 @@ impl StorageBackend for DummyStorage {
 fn create_dummy_storage() -> Box<dyn StorageBackend> {
     Box::new(DummyStorage)
 }
+

@@ -6,13 +6,13 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const cliProgress = require('cli-progress');
 
-// Try to import vectra-enhanced, fallback to local simulation if not available
+// Import vectrust
 let LocalIndex;
 try {
-    const vectra = require('vectra-enhanced');
-    LocalIndex = vectra.LocalIndex;
+    const vectrust = require('vectrust');
+    LocalIndex = vectrust.LocalIndex;
 } catch (error) {
-    console.warn('⚠️  vectra-enhanced not found. Please install with: npm install vectra-enhanced');
+    console.warn('⚠️  vectrust not found. Please install with: npm install');
     console.warn('   Using simulation mode for testing...');
     LocalIndex = require('./vectra-sim');
 }

@@ -8,7 +8,7 @@ members = [
     "crates/vectrust-cli",
     "examples",
     "tests",
-    # "crates/vectrust-node",  # Temporarily disabled for compilation
+    "crates/vectrust-node",
 ]
 exclude = [
     "benchmarks/rust",

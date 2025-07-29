@@ -3,11 +3,11 @@ const path = require('path');
 const os = require('os');
 const TestDataGenerator = require('./test-data');
 
-// Try to import vectra-enhanced, fallback to simulation if not available
+// Try to import vectrust, fallback to simulation if not available
 let LocalIndex;
 try {
-    const vectra = require('vectra-enhanced');
-    LocalIndex = vectra.LocalIndex;
+    const vectrust = require('vectrust');
+    LocalIndex = vectrust.LocalIndex;
 } catch (error) {
     // Fallback simulation for testing the benchmark structure
     LocalIndex = class {
@@ -69,7 +69,7 @@ try {
         }
     };
     
-    console.log('📝 Using vectra simulation (vectra-enhanced not found)');
+    console.log('📝 Using vectrust simulation (vectrust not found)');
 }
 
 class IndexBenchmarkSuite {
@@ -81,16 +81,16 @@ class IndexBenchmarkSuite {
         const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vectra-bench-'));
         const index = new LocalIndex(tempDir);
         
-        await index.createIndex({
-            deleteIfExists: true
-        });
+        await index.createIndex(JSON.stringify({
+            delete_if_exists: true
+        }));
         
         // Add some vectors to make it realistic
         const testData = new TestDataGenerator(dimensions);
         const vectors = testData.generateVectors(Math.min(vectorCount, 1000));
         
         for (const vector of vectors) {
-            await index.insertItem(vector);
+            await index.insertItem(JSON.stringify(vector));
         }
         
         // Clean up
@@ -108,7 +108,7 @@ class IndexBenchmarkSuite {
         const vectors = testData.generateVectors(100);
         
         for (const vector of vectors) {
-            await index.insertItem(vector);
+            await index.insertItem(JSON.stringify(vector));
         }
         
         // Create new index instance (simulates loading)
@@ -144,7 +144,8 @@ class ItemBenchmarkSuite {
     
     async benchmarkSingleInsert(item) {
         await this.setup();
-        const inserted = await this.index.insertItem(item);
+        const insertedJson = await this.index.insertItem(JSON.stringify(item));
+        const inserted = JSON.parse(insertedJson);
         this.insertedItems.push(inserted);
     }
     
@@ -161,7 +162,8 @@ class ItemBenchmarkSuite {
         await this.setup();
         
         for (const item of items) {
-            const inserted = await this.index.insertItem(item);
+            const insertedJson = await this.index.insertItem(JSON.stringify(item));
+        const inserted = JSON.parse(insertedJson);
             this.insertedItems.push(inserted);
         }
     }
@@ -262,7 +264,7 @@ class ScaleBenchmarkSuite {
         await index.createIndex();
         
         for (const vector of vectors) {
-            await index.insertItem(vector);
+            await index.insertItem(JSON.stringify(vector));
         }
         
         // Clean up
@@ -282,7 +284,7 @@ class ScaleBenchmarkSuite {
         const vectors = testData.generateVectors(100);
         
         for (const vector of vectors) {
-            await index.insertItem(vector);
+            await index.insertItem(JSON.stringify(vector));
         }
         
         await index.queryItems(queryVector.vector, k);

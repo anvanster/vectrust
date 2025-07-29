@@ -6,7 +6,7 @@ use tokio::sync::RwLock;
 
 /// High-level LocalIndex that integrates all components
 pub struct LocalIndex {
-    storage: Arc<RwLock<Box<dyn vectrust_storage::StorageBackend>>>,
+    storage: Arc<RwLock<Box<dyn StorageBackend>>>,
     #[allow(dead_code)]
     path: std::path::PathBuf,
     #[allow(dead_code)]

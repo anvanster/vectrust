@@ -79,3 +79,8 @@ cobertura.xml
 # Backup files
 *.backup
 *.bak
+# Claude Code configuration
+.claude/
+
+# MCP Context Server data
+.mcp-context/

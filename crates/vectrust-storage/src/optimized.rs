@@ -84,7 +84,9 @@ impl OptimizedStorage {
         db_opts.set_level_compaction_dynamic_level_bytes(true);
         db_opts.set_max_bytes_for_level_base(256 * 1024 * 1024); // 256MB
         db_opts.set_max_background_jobs(4);
-        db_opts.set_bytes_per_sync(1024 * 1024); // 1MB
+        db_opts.set_bytes_per_sync(64 * 1024 * 1024); // 64MB - sync less frequently
+        
+        // Note: We're not disabling auto-compactions as it can cause issues
         
         let cf_names = vec![METADATA_CF, VECTOR_INDEX_CF];
         let db = DB::open_cf(&db_opts, db_path, cf_names)?;
@@ -142,6 +144,16 @@ impl OptimizedStorage {
         if let Some(ref mut mmap) = *mmap_guard {
             let start = offset as usize;
             let dimensions = vector.len();
+            
+            // Check bounds
+            let end_pos = start + VECTOR_HEADER_SIZE + (dimensions * 4);
+            let mmap_len = mmap.len();
+            if end_pos > mmap_len {
+                return Err(VectraError::StorageError {
+                    message: format!("Memory map too small: need {} bytes, have {} bytes", 
+                                   end_pos, mmap_len)
+                });
+            }
             
             // Write dimensions count first (8 bytes)
             let dim_bytes = (dimensions as u64).to_le_bytes();
@@ -216,13 +228,30 @@ impl OptimizedStorage {
     async fn save_manifest_to_disk(&self, manifest: &Manifest) -> Result<()> {
         let manifest_path = self.manifest_path();
         
+        // Debug: Track manifest saves
+        static SAVE_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let count = SAVE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if count % 10 == 0 {
+            println!("DEBUG: Manifest save #{}, total_items: {}", count + 1, manifest.total_items);
+        }
+        
         // Ensure directory exists
         if let Some(parent) = manifest_path.parent() {
             fs::create_dir_all(parent).await?;
         }
         
+        let start = std::time::Instant::now();
         let content = serde_json::to_string_pretty(manifest)?;
+        let json_time = start.elapsed();
+        
+        let start = std::time::Instant::now();
         fs::write(manifest_path, content).await?;
+        let write_time = start.elapsed();
+        
+        if count % 10 == 0 {
+            println!("  JSON serialize: {} µs, Disk write: {} µs", 
+                     json_time.as_micros(), write_time.as_micros());
+        }
         
         Ok(())
     }
@@ -275,6 +304,69 @@ impl OptimizedStorage {
         Ok(())
     }
     
+    async fn ensure_vector_file_capacity(&self, needed_size: u64) -> Result<()> {
+        let vector_path = self.path.join("vectors.dat");
+        
+        // Check if file exists first
+        if !vector_path.exists() {
+            return Err(VectraError::StorageError {
+                message: "Vector file does not exist".to_string()
+            });
+        }
+        
+        // Get current file size
+        let metadata = tokio::fs::metadata(&vector_path).await?;
+        let current_size = metadata.len();
+        
+        if needed_size > current_size {
+            // Calculate new size with some headroom (grow by at least 50% or to needed size + 10MB)
+            let new_size = std::cmp::max(
+                (current_size as f64 * 1.5) as u64,
+                needed_size + (10 * 1024 * 1024) // Add 10MB buffer
+            );
+            
+            println!("    📈 Growing vector file from {} MB to {} MB", 
+                     current_size / 1024 / 1024, 
+                     new_size / 1024 / 1024);
+            
+            // We need to recreate the memory map with a larger file
+            // First, flush and drop the current mmap
+            {
+                let mut mmap_guard = self.vector_mmap.write().await;
+                if let Some(ref mut mmap) = *mmap_guard {
+                    mmap.flush()?;
+                }
+                *mmap_guard = None; // Drop the old mmap
+            }
+            
+            // Also drop the file handle
+            {
+                let mut file_guard = self.vector_file.write().await;
+                *file_guard = None;
+            }
+            
+            // Resize the file
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&vector_path)?;
+            
+            file.set_len(new_size)?;
+            file.sync_all()?; // Ensure the resize is flushed
+            
+            // Create new memory map
+            let mmap = unsafe { MmapOptions::new().map_mut(&file)? };
+            
+            // Update the handles
+            *self.vector_file.write().await = Some(file);
+            *self.vector_mmap.write().await = Some(mmap);
+            
+            println!("    ✅ Vector file resized successfully");
+        }
+        
+        Ok(())
+    }
+    
     async fn get_next_vector_offset(&self, vector_size: usize) -> Result<u64> {
         let current_offset = {
             let mut manifest_guard = self.manifest.write().await;
@@ -291,9 +383,14 @@ impl OptimizedStorage {
             }
         };
         
-        // Mark manifest as dirty for batched saving
-        self.mark_manifest_dirty().await?;
+        // Don't mark dirty here - let the caller decide when to mark dirty
         Ok(current_offset)
+    }
+    
+    async fn get_next_vector_offset_and_mark_dirty(&self, vector_size: usize) -> Result<u64> {
+        let offset = self.get_next_vector_offset(vector_size).await?;
+        self.mark_manifest_dirty().await?;
+        Ok(offset)
     }
     
     /// Ensure all pending changes are flushed to disk
@@ -316,7 +413,7 @@ impl OptimizedStorage {
 }
 
 #[async_trait]
-impl crate::StorageBackend for OptimizedStorage {
+impl StorageBackend for OptimizedStorage {
     async fn exists(&self) -> bool {
         self.manifest_path().exists()
     }
@@ -354,8 +451,9 @@ impl crate::StorageBackend for OptimizedStorage {
         // Make sure manifest is persisted for create operations
         self.flush_manifest_if_dirty().await?;
         
-        // Create initial vector file (1MB initial size)
-        self.create_vector_file(1024 * 1024).await?;
+        // Create initial vector file (10MB initial size - reasonable for ~6.5K vectors with 384 dims)
+        // File will grow dynamically as needed
+        self.create_vector_file(10 * 1024 * 1024).await?;
         
         Ok(())
     }
@@ -394,6 +492,16 @@ impl crate::StorageBackend for OptimizedStorage {
             self.initialize_storage().await?;
         }
         
+        // Add timing for debugging
+        let start_total = std::time::Instant::now();
+        
+        // Debug: count inserts
+        static DEBUG_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let debug_count = DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if debug_count % 50 == 0 {
+            println!("DEBUG: insert_item called {} times", debug_count + 1);
+        }
+        
         let dimensions = item.vector.len();
         
         // Set dimensions if this is the first item
@@ -423,10 +531,14 @@ impl crate::StorageBackend for OptimizedStorage {
         }
         
         // Get offset for vector storage
-        let vector_offset = self.get_next_vector_offset(dimensions).await?;
+        let start = std::time::Instant::now();
+        let vector_offset = self.get_next_vector_offset_and_mark_dirty(dimensions).await?;
+        let offset_time = start.elapsed();
         
         // Write vector to memory-mapped file
+        let start = std::time::Instant::now();
         self.write_vector_to_file(&item.vector, vector_offset).await?;
+        let mmap_time = start.elapsed();
         
         // Store metadata and vector record in RocksDB
         let db_guard = self.db.read().await;
@@ -440,7 +552,12 @@ impl crate::StorageBackend for OptimizedStorage {
             let mut metadata_item = item.clone();
             metadata_item.vector = Vec::new(); // Don't store vector in metadata
             let metadata_bytes = serde_json::to_vec(&metadata_item)?;
-            db.put_cf(metadata_cf, id_bytes, metadata_bytes)?;
+            // Use write options for better performance
+            let mut write_opts = rocksdb::WriteOptions::default();
+            write_opts.disable_wal(true); // Disable WAL for better performance
+            
+            let start = std::time::Instant::now();
+            db.put_cf_opt(metadata_cf, id_bytes, metadata_bytes, &write_opts)?;
             
             // Store vector record
             let vector_record = VectorRecord {
@@ -450,22 +567,36 @@ impl crate::StorageBackend for OptimizedStorage {
                 deleted: false,
             };
             let vector_record_bytes = bincode::serialize(&vector_record)?;
-            db.put_cf(vector_index_cf, id_bytes, vector_record_bytes)?;
+            db.put_cf_opt(vector_index_cf, id_bytes, vector_record_bytes, &write_opts)?;
+            let db_time = start.elapsed();
             
-            // Update manifest
-            {
+            // Update manifest and log timing
+            let total_items = {
                 let mut manifest_guard = self.manifest.write().await;
                 if let Some(ref mut manifest) = *manifest_guard {
                     manifest.total_items += 1;
+                    manifest.total_items
                 } else {
                     return Err(VectraError::StorageError {
                         message: "Manifest not initialized".to_string()
                     });
                 }
-            }
+            };
             
             // Mark manifest dirty for batched saving
             self.mark_manifest_dirty().await?;
+            
+            // Log timing periodically based on total_items
+            if total_items == 50 || total_items == 100 || total_items == 200 || total_items == 500 || total_items == 1000 {
+                let total_time = start_total.elapsed();
+                println!("    Storage: After {} items, insert took {} µs (offset: {} µs, mmap: {} µs, db: {} µs, rest: {} µs)",
+                         total_items,
+                         total_time.as_micros(),
+                         offset_time.as_micros(),
+                         mmap_time.as_micros(),
+                         db_time.as_micros(),
+                         total_time.as_micros() - offset_time.as_micros() - mmap_time.as_micros() - db_time.as_micros());
+            }
         }
         
         Ok(())
@@ -516,10 +647,52 @@ impl crate::StorageBackend for OptimizedStorage {
             }
         }
         
-        // Pre-allocate vector offsets and prepare data
+        // Calculate total space needed for all vectors
+        let record_size = VECTOR_HEADER_SIZE + (first_dimensions * 4);
+        let total_space_needed = items.len() * record_size;
+        
+        // Pre-check and grow file if needed before any writes
+        {
+            let manifest = self.manifest.read().await;
+            if let Some(ref m) = *manifest {
+                let current_offset = m.next_vector_offset;
+                let final_size = current_offset + total_space_needed as u64;
+                drop(manifest); // Release the lock before calling ensure_vector_file_capacity
+                
+                // Only print for large batches
+                if items.len() >= 2500 {
+                    println!("DEBUG: Batch size: {}, Current offset: {}, Final size needed: {}", 
+                             items.len(), current_offset, final_size);
+                }
+                
+                self.ensure_vector_file_capacity(final_size).await?;
+            }
+        }
+        
+        // Pre-allocate ALL vector offsets at once to avoid repeated lock acquisition
+        let record_size = VECTOR_HEADER_SIZE + (first_dimensions * 4);
+        let mut offsets = Vec::with_capacity(items.len());
+        {
+            let mut manifest_guard = self.manifest.write().await;
+            if let Some(ref mut manifest) = *manifest_guard {
+                let mut current_offset = manifest.next_vector_offset;
+                for _ in 0..items.len() {
+                    offsets.push(current_offset);
+                    current_offset += record_size as u64;
+                }
+                manifest.next_vector_offset = current_offset;
+                manifest.vector_file_size = current_offset;
+            } else {
+                return Err(VectraError::StorageError {
+                    message: "Manifest not initialized".to_string()
+                });
+            }
+        }
+        
+        // Now write vectors and prepare data without repeated lock acquisition
         let mut prepared_data = Vec::with_capacity(items.len());
-        for item in items {
-            let vector_offset = self.get_next_vector_offset(first_dimensions).await?;
+        for (idx, item) in items.iter().enumerate() {
+            let vector_offset = offsets[idx];
             self.write_vector_to_file(&item.vector, vector_offset).await?;
             
             // Prepare metadata (without vector data) using JSON
@@ -780,7 +953,7 @@ impl crate::StorageBackend for OptimizedStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::StorageBackend;
+    use vectrust_core::StorageBackend;
     use tempfile::TempDir;
     
     #[tokio::test]

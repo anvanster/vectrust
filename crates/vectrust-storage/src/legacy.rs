@@ -114,7 +114,7 @@ impl LegacyStorage {
 }
 
 #[async_trait]
-impl crate::StorageBackend for LegacyStorage {
+impl StorageBackend for LegacyStorage {
     async fn exists(&self) -> bool {
         self.index_path().exists()
     }

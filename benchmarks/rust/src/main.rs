@@ -237,17 +237,22 @@ async fn run_scale_benchmarks(_args: &Args, vectors: &[VectorItem], results: &mu
     
     for &size in &scale_sizes {
         if size <= vectors.len() {
+            println!("  🚀 Starting scale test with {} items", size);
             let subset = &vectors[0..size];
             let time = time_operation(&format!("Scale {} items", size), 1, || {
                 let data = subset.to_vec();
                 async move {
+                    println!("    📂 Creating temp dir...");
                     let temp_dir = tempfile::TempDir::new()?;
+                    println!("    🏗️  Creating index...");
                     let index = LocalIndex::new(temp_dir.path(), None)?;
                     let config = CreateIndexConfig::default();
                     index.create_index(Some(config)).await?;
                     
+                    println!("    📥 Starting bulk insert of {} items...", data.len());
                     // Use bulk insert for better performance
                     index.insert_items(data).await?;
+                    println!("    ✅ Bulk insert completed");
                     Ok(())
                 }
             }).await?;

@@ -13,7 +13,7 @@
     "install-vectra": "npm install vectra-enhanced"
   },
   "dependencies": {
-    "vectra-enhanced": "^1.0.0",
+    "vectrust": "file:../../crates/vectrust-node",
     "uuid": "^9.0.0",
     "commander": "^11.0.0",
     "cli-progress": "^3.12.0",
