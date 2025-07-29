@@ -16,8 +16,8 @@ impl Storage {
             // V1 legacy format
             Ok(Box::new(crate::LegacyStorage::new(path, index_name)?))
         } else {
-            // New index - use legacy format for now since optimized isn't fully implemented
-            Ok(Box::new(crate::LegacyStorage::new(path, index_name)?))
+            // New index - use optimized format
+            Ok(Box::new(crate::OptimizedStorage::new(path)?))
         }
     }
 }

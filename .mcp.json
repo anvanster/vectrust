@@ -2,9 +2,7 @@
   "mcpServers": {
     "mcp-context": {
       "command": "node",
-      "args": [
-        "/Users/anvanster/projects/mcp-context-server/dist/index.js"
-      ],
+      "args": ["/home/jason/.nvm/versions/node/v24.1.0/lib/node_modules/mcp-context-server/dist/index.js"],
       "env": {
         "MCP_SERVER": "true",
         "SERVER_MODE": "project-aware"
