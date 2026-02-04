@@ -1,6 +1,6 @@
 [package]
 name = "vectrust-node"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["Andrey Vasilevsky", "Vectrust Contributors"]
 edition = "2021"
 license = "MIT"
@@ -10,7 +10,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-vectrust = { version = "0.1.2", path = "../vectrust" }
+vectrust = { version = "0.1.3", path = "../vectrust" }
 napi = { version = "2.14", features = ["async", "tokio_rt"] }
 napi-derive = "2.14"
 tokio = { version = "1.35", features = ["full"] }

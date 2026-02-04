@@ -8,9 +8,9 @@ repository.workspace = true
 description = "Query engine for the vectrust vector database"
 
 [dependencies]
-vectrust-core = { version = "0.1.2", path = "../vectrust-core" }
-vectrust-storage = { version = "0.1.2", path = "../vectrust-storage" }
-vectrust-index = { version = "0.1.2", path = "../vectrust-index" }
+vectrust-core = { version = "0.1.3", path = "../vectrust-core" }
+vectrust-storage = { version = "0.1.3", path = "../vectrust-storage" }
+vectrust-index = { version = "0.1.3", path = "../vectrust-index" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
