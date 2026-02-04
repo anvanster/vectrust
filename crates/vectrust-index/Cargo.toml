@@ -4,10 +4,12 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "HNSW indexing engine for the vectrust vector database"
 
 [dependencies]
-vectrust-core = { path = "../vectrust-core" }
-vectrust-storage = { path = "../vectrust-storage" }
+vectrust-core = { version = "0.1.2", path = "../vectrust-core" }
+vectrust-storage = { version = "0.1.2", path = "../vectrust-storage" }
 ndarray.workspace = true
 nalgebra.workspace = true
 instant-distance.workspace = true

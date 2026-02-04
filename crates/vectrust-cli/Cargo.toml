@@ -4,16 +4,18 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "CLI tool for the vectrust vector database"
 
 [[bin]]
 name = "vectrust"
 path = "src/main.rs"
 
 [dependencies]
-vectrust-core = { path = "../vectrust-core" }
-vectrust-storage = { path = "../vectrust-storage" }
-vectrust-index = { path = "../vectrust-index" }
-vectrust-query = { path = "../vectrust-query" }
+vectrust-core = { version = "0.1.2", path = "../vectrust-core" }
+vectrust-storage = { version = "0.1.2", path = "../vectrust-storage" }
+vectrust-index = { version = "0.1.2", path = "../vectrust-index" }
+vectrust-query = { version = "0.1.2", path = "../vectrust-query" }
 clap = { version = "4.4", features = ["derive"] }
 tokio.workspace = true
 anyhow.workspace = true

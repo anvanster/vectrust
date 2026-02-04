@@ -1,3 +1,6 @@
+use tempfile::TempDir;
+use uuid::Uuid;
+use vectrust::{CreateIndexConfig, LocalIndex, QueryResult, Result, VectorItem};
 
 #[tokio::test]
 async fn test_create_and_query_index() -> Result<()> {
@@ -33,7 +36,7 @@ async fn test_create_and_query_index() -> Result<()> {
     assert_eq!(inserted.vector, test_item.vector);
     
     // Query the item back
-    let retrieved = index.get_item(&inserted.id).await?;
+    let retrieved: Option<VectorItem> = index.get_item(&inserted.id).await?;
     assert!(retrieved.is_some());
     
     let retrieved_item = retrieved.unwrap();
@@ -42,7 +45,7 @@ async fn test_create_and_query_index() -> Result<()> {
     
     // Test vector search
     let query_vector = vec![1.0, 0.0, 0.0];
-    let results = index.query_items(query_vector, Some(10), None).await?;
+    let results: Vec<QueryResult> = index.query_items(query_vector, Some(10), None).await?;
     
     assert!(!results.is_empty());
     assert_eq!(results[0].item.id, inserted.id);
@@ -79,7 +82,7 @@ async fn test_legacy_compatibility() -> Result<()> {
     }"#;
     
     let index_file_path = index_path.join("index.json");
-    tokio::fs::write(&index_file_path, legacy_index).await.unwrap();
+    tokio::fs::write(&index_file_path, legacy_index.as_bytes()).await.unwrap();
     
     // Open with Rust implementation - should auto-detect legacy format
     let index = LocalIndex::new(index_path, None)?;
@@ -88,7 +91,7 @@ async fn test_legacy_compatibility() -> Result<()> {
     
     // Should be able to read the legacy item
     let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    let item = index.get_item(&uuid).await?;
+    let item: Option<VectorItem> = index.get_item(&uuid).await?;
     
     assert!(item.is_some());
     let item = item.unwrap();

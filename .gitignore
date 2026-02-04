@@ -84,3 +84,9 @@ cobertura.xml
 
 # MCP Context Server data
 .mcp-context/
+
+# Cursor configuration
+.cursor/
+
+# MCP Context Server data
+.codemender/

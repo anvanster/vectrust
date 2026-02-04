@@ -798,6 +798,11 @@ impl StorageBackend for OptimizedStorage {
     }
     
     async fn list_items(&self, options: Option<ListOptions>) -> Result<Vec<VectorItem>> {
+        // Ensure storage is initialized for read operations
+        if self.db.read().await.is_none() {
+            self.initialize_storage().await?;
+        }
+
         // Collect all the metadata records first without holding DB references
         let metadata_records = {
             let db_guard = self.db.read().await;
@@ -884,16 +889,19 @@ impl StorageBackend for OptimizedStorage {
     }
     
     async fn commit_transaction(&mut self) -> Result<()> {
+        // Flush manifest to disk
+        self.flush_manifest_if_dirty().await?;
+
         // Flush any pending writes
         let db_guard = self.db.read().await;
         if let Some(ref db) = *db_guard {
             db.flush()?;
         }
-        
+
         if let Some(ref mut mmap_guard) = *self.vector_mmap.write().await {
             mmap_guard.flush()?;
         }
-        
+
         Ok(())
     }
     

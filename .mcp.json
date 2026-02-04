@@ -1,11 +1,14 @@
 {
   "mcpServers": {
-    "mcp-context": {
+    "codemender": {
       "command": "node",
-      "args": ["/home/jason/.nvm/versions/node/v24.1.0/lib/node_modules/mcp-context-server/dist/index.js"],
+      "args": [
+        "/Users/anvanster/.nvm/versions/node/v22.17.0/lib/node_modules/codemender/dist/index.js"
+      ],
       "env": {
         "MCP_SERVER": "true",
-        "SERVER_MODE": "project-aware"
+        "SERVER_MODE": "project-aware",
+        "ROBERTA_MODEL_PATH": "/Users/anvanster/projects/models/roberta-base"
       }
     }
   }

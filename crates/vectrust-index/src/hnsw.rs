@@ -80,8 +80,31 @@ impl HnswIndex {
         let mut visited = HashSet::new();
         let mut candidates = BinaryHeap::new();
         let mut w = BinaryHeap::new(); // dynamic list of closest nodes
-        
+
         // Initialize with entry points
+        self.initialize_search_candidates(query, entry_points, &mut visited, &mut candidates, &mut w);
+
+        while let Some(current) = candidates.pop() {
+            // Check if we should stop searching
+            if self.should_stop_search(&current, &w, num_closest) {
+                break;
+            }
+
+            // Process neighbors of current node
+            self.process_neighbors(query, &current, level, num_closest, &mut visited, &mut candidates, &mut w);
+        }
+
+        self.finalize_search_results(w, num_closest)
+    }
+
+    fn initialize_search_candidates(
+        &self,
+        query: &[f32],
+        entry_points: &[Uuid],
+        visited: &mut HashSet<Uuid>,
+        candidates: &mut BinaryHeap<SearchCandidate>,
+        w: &mut BinaryHeap<SearchCandidate>,
+    ) {
         for &ep in entry_points {
             if let Some(node) = self.nodes.get(&ep) {
                 let distance = self.calculate_distance(query, &node.vector);
@@ -91,51 +114,77 @@ impl HnswIndex {
                 visited.insert(ep);
             }
         }
-        
-        while let Some(current) = candidates.pop() {
-            // If current is farther than the farthest in w, stop
-            if let Some(farthest) = w.iter().max_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap()) {
-                if current.distance > farthest.distance && w.len() >= num_closest {
-                    break;
-                }
-            }
-            
-            // Check neighbors of current node
-            if let Some(node) = self.nodes.get(&current.id) {
-                if level < node.connections.len() {
-                    for &neighbor_id in &node.connections[level] {
-                        if !visited.contains(&neighbor_id) {
-                            visited.insert(neighbor_id);
-                            
-                            if let Some(neighbor) = self.nodes.get(&neighbor_id) {
-                                let distance = self.calculate_distance(query, &neighbor.vector);
-                                let candidate = SearchCandidate { id: neighbor_id, distance };
-                                
-                                // Add to candidates if better than worst in w
-                                if w.len() < num_closest {
-                                    candidates.push(candidate.clone());
-                                    w.push(candidate);
-                                } else if let Some(farthest) = w.iter().max_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap()) {
-                                    if distance < farthest.distance {
-                                        candidates.push(candidate.clone());
-                                        w.push(candidate);
-                                        
-                                        // Remove farthest if w is too large
-                                        if w.len() > num_closest {
-                                            let mut temp_vec: Vec<_> = w.into_iter().collect();
-                                            temp_vec.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
-                                            temp_vec.truncate(num_closest);
-                                            w = temp_vec.into_iter().collect();
-                                        }
-                                    }
-                                }
-                            }
-                        }
+    }
+
+    fn should_stop_search(&self, current: &SearchCandidate, w: &BinaryHeap<SearchCandidate>, num_closest: usize) -> bool {
+        if let Some(farthest) = w.iter().max_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap()) {
+            current.distance > farthest.distance && w.len() >= num_closest
+        } else {
+            false
+        }
+    }
+
+    fn process_neighbors(
+        &self,
+        query: &[f32],
+        current: &SearchCandidate,
+        level: usize,
+        num_closest: usize,
+        visited: &mut HashSet<Uuid>,
+        candidates: &mut BinaryHeap<SearchCandidate>,
+        w: &mut BinaryHeap<SearchCandidate>,
+    ) {
+        if let Some(node) = self.nodes.get(&current.id) {
+            if level < node.connections.len() {
+                for &neighbor_id in &node.connections[level] {
+                    if visited.insert(neighbor_id) {
+                        self.evaluate_neighbor(query, neighbor_id, num_closest, candidates, w);
                     }
                 }
             }
         }
-        
+    }
+
+    fn evaluate_neighbor(
+        &self,
+        query: &[f32],
+        neighbor_id: Uuid,
+        num_closest: usize,
+        candidates: &mut BinaryHeap<SearchCandidate>,
+        w: &mut BinaryHeap<SearchCandidate>,
+    ) {
+        if let Some(neighbor) = self.nodes.get(&neighbor_id) {
+            let distance = self.calculate_distance(query, &neighbor.vector);
+            let candidate = SearchCandidate { id: neighbor_id, distance };
+
+            if self.should_add_candidate(&candidate, w, num_closest) {
+                candidates.push(candidate.clone());
+                w.push(candidate);
+                self.maintain_candidate_limit(w, num_closest);
+            }
+        }
+    }
+
+    fn should_add_candidate(&self, candidate: &SearchCandidate, w: &BinaryHeap<SearchCandidate>, num_closest: usize) -> bool {
+        if w.len() < num_closest {
+            true
+        } else if let Some(farthest) = w.iter().max_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap()) {
+            candidate.distance < farthest.distance
+        } else {
+            false
+        }
+    }
+
+    fn maintain_candidate_limit(&self, w: &mut BinaryHeap<SearchCandidate>, num_closest: usize) {
+        if w.len() > num_closest {
+            let mut temp_vec: Vec<_> = w.clone().into_iter().collect();
+            temp_vec.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+            temp_vec.truncate(num_closest);
+            *w = temp_vec.into_iter().collect();
+        }
+    }
+
+    fn finalize_search_results(&self, w: BinaryHeap<SearchCandidate>, num_closest: usize) -> Vec<SearchCandidate> {
         let mut result: Vec<_> = w.into_iter().collect();
         result.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
         result.truncate(num_closest);

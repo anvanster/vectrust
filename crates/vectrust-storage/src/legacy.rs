@@ -28,6 +28,69 @@ impl LegacyStorage {
             cache: tokio::sync::RwLock::new(None),
         })
     }
+
+    async fn perform_vector_search(&self, items: &[VectorItem], query_vector: &[f32], top_k: usize) -> Result<Vec<QueryResult>> {
+        let mut results = self.compute_similarity_scores(items, query_vector)?;
+
+        // Sort by score descending and apply limit
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(top_k);
+
+        // Load external metadata for results
+        self.load_results_metadata(&mut results).await?;
+
+        Ok(results)
+    }
+
+    fn compute_similarity_scores(&self, items: &[VectorItem], query_vector: &[f32]) -> Result<Vec<QueryResult>> {
+        let mut results = Vec::new();
+
+        for item in items {
+            if let Some(result) = Self::evaluate_item_similarity(item, query_vector) {
+                results.push(result);
+            }
+        }
+
+        Ok(results)
+    }
+
+    fn evaluate_item_similarity(item: &VectorItem, query_vector: &[f32]) -> Option<QueryResult> {
+        // Skip deleted items
+        if item.deleted {
+            return None;
+        }
+
+        // Validate vector compatibility
+        if !VectorOps::compatible_dimensions(query_vector, &item.vector) {
+            return None;
+        }
+
+        // Calculate similarity using cosine similarity (legacy format default)
+        let similarity = VectorOps::calculate_similarity(
+            query_vector,
+            &item.vector,
+            &DistanceMetric::Cosine
+        );
+
+        // Only include valid similarities
+        if similarity.is_finite() {
+            Some(QueryResult {
+                item: item.clone(),
+                score: similarity,
+            })
+        } else {
+            None
+        }
+    }
+
+    async fn load_results_metadata(&self, results: &mut Vec<QueryResult>) -> Result<()> {
+        for result in results {
+            if let Some(external_metadata) = self.load_metadata(&result.item.id).await? {
+                result.item.metadata = external_metadata;
+            }
+        }
+        Ok(())
+    }
     
     fn index_path(&self) -> PathBuf {
         self.path.join(&self.index_name)
@@ -254,50 +317,9 @@ impl StorageBackend for LegacyStorage {
     
     async fn query_items(&self, query: &Query) -> Result<Vec<QueryResult>> {
         let index = self.load_index().await?;
-        
+
         if let Some(ref query_vector) = query.vector {
-            // Vector similarity search using proper vector operations
-            let mut results = Vec::new();
-            
-            for item in &index.items {
-                if item.deleted {
-                    continue;
-                }
-                
-                // Validate vector compatibility
-                if !VectorOps::compatible_dimensions(query_vector, &item.vector) {
-                    continue;
-                }
-                
-                // Calculate similarity using cosine similarity (legacy format default)
-                let similarity = VectorOps::calculate_similarity(
-                    query_vector, 
-                    &item.vector, 
-                    &DistanceMetric::Cosine
-                );
-                
-                // Only include valid similarities
-                if similarity.is_finite() {
-                    results.push(QueryResult {
-                        item: item.clone(),
-                        score: similarity,
-                    });
-                }
-            }
-            
-            // Sort by score descending
-            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-            
-            // Apply limit
-            results.truncate(query.top_k);
-            
-            // Load external metadata for results
-            for result in &mut results {
-                if let Some(external_metadata) = self.load_metadata(&result.item.id).await? {
-                    result.item.metadata = external_metadata;
-                }
-            }
-            
+            let results = self.perform_vector_search(&index.items, query_vector, query.top_k).await?;
             Ok(results)
         } else if let Some(ref _text_query) = query.text {
             // Text-only search not implemented in legacy format

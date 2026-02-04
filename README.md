@@ -206,7 +206,38 @@ cargo test
 cd crates/vectrust-node
 npm install
 npm run build
+
+# Test Node.js bindings
+npm test
 ```
+
+### Publishing to NPM
+
+To publish the Node.js package to NPM registry:
+
+```bash
+# Navigate to Node.js bindings directory
+cd crates/vectrust-node
+
+# Install dependencies and build cross-platform binaries
+npm install
+rustup target add aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+
+# Build native binaries (this creates .node files for all platforms)
+npm run build
+
+# Test the package
+npm test
+
+# Publish to NPM (requires npm authentication)
+npm publish
+```
+
+**Note**: The build process creates pre-compiled native binaries for:
+- macOS (Intel & Apple Silicon)
+- Linux (x64 & ARM64)
+
+Users don't need to compile anything - they get the appropriate binary for their platform automatically.
 
 ### Project Structure
 

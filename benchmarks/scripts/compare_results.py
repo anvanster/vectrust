@@ -89,35 +89,47 @@ def generate_comparison_report(rust_results, nodejs_results, output_dir):
     if not rust_results or not nodejs_results:
         print("❌ Cannot generate comparison: missing results from one or both implementations")
         return
-    
+
     rust_data = get_latest_results(rust_results)
     nodejs_data = get_latest_results(nodejs_results)
-    
+
     if not rust_data or not nodejs_data:
         print("❌ Cannot find valid benchmark data")
         return
-    
+
     rust_times = rust_data['results']
     nodejs_times = nodejs_data['results']
-    
+
     # Find common benchmarks
     common_benchmarks = set(rust_times.keys()) & set(nodejs_times.keys())
-    
+
     if not common_benchmarks:
         print("❌ No common benchmarks found between Rust and Node.js results")
         return
-    
-    # Generate report
-    report_lines = []
-    report_lines.append("# Vectra Performance Comparison Report")
-    report_lines.append("=" * 50)
-    report_lines.append("")
-    report_lines.append(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    report_lines.append(f"**Rust Results:** {rust_data.get('timestamp', 'Unknown')}")
-    report_lines.append(f"**Node.js Results:** {nodejs_data.get('timestamp', 'Unknown')}")
-    report_lines.append("")
-    
-    # Summary statistics
+
+    # Generate and save reports
+    report_data = compile_report_data(rust_data, nodejs_data, rust_times, nodejs_times, common_benchmarks)
+    save_reports(report_data, output_dir)
+    print_summary(report_data)
+
+def compile_report_data(rust_data, nodejs_data, rust_times, nodejs_times, common_benchmarks):
+    """Compile all report data into a structured format."""
+    speedups = calculate_all_speedups(rust_times, nodejs_times, common_benchmarks)
+
+    return {
+        'rust_data': rust_data,
+        'nodejs_data': nodejs_data,
+        'rust_times': rust_times,
+        'nodejs_times': nodejs_times,
+        'common_benchmarks': common_benchmarks,
+        'speedups': speedups,
+        'statistics': calculate_statistics(speedups),
+        'categories': categorize_benchmarks(common_benchmarks),
+        'best_benchmarks': find_best_performers(rust_times, nodejs_times, common_benchmarks)
+    }
+
+def calculate_all_speedups(rust_times, nodejs_times, common_benchmarks):
+    """Calculate speedup for all common benchmarks."""
     speedups = []
     for benchmark in common_benchmarks:
         rust_time = rust_times[benchmark]
@@ -125,144 +137,215 @@ def generate_comparison_report(rust_results, nodejs_results, output_dir):
         speedup = calculate_speedup(rust_time, nodejs_time)
         if speedup != float('inf'):
             speedups.append(speedup)
-    
-    if speedups:
-        avg_speedup = sum(speedups) / len(speedups)
-        max_speedup = max(speedups)
-        min_speedup = min(speedups)
-        
-        report_lines.append("## 📊 Summary")
-        report_lines.append("")
-        report_lines.append(f"- **Average Speedup:** {format_speedup(avg_speedup)}")
-        report_lines.append(f"- **Best Speedup:** {format_speedup(max_speedup)}")
-        report_lines.append(f"- **Worst Speedup:** {format_speedup(min_speedup)}")
-        report_lines.append(f"- **Benchmarks Compared:** {len(common_benchmarks)}")
-        report_lines.append("")
-    
-    # Detailed comparison table
-    report_lines.append("## 🔍 Detailed Results")
-    report_lines.append("")
-    report_lines.append("| Benchmark | Rust | Node.js | Speedup |")
-    report_lines.append("|-----------|------|---------|---------|")
-    
-    # Sort benchmarks by category for better readability
-    sorted_benchmarks = sorted(common_benchmarks)
-    
-    for benchmark in sorted_benchmarks:
-        rust_time = rust_times[benchmark]
-        nodejs_time = nodejs_times[benchmark]
-        speedup = calculate_speedup(rust_time, nodejs_time)
-        
-        report_lines.append(f"| {benchmark} | {format_time(rust_time)} | {format_time(nodejs_time)} | {format_speedup(speedup)} |")
-    
-    report_lines.append("")
-    
-    # Category analysis
-    categories = {
+    return speedups
+
+def calculate_statistics(speedups):
+    """Calculate summary statistics for speedups."""
+    if not speedups:
+        return {'avg': 0, 'max': 0, 'min': 0}
+    return {
+        'avg': sum(speedups) / len(speedups),
+        'max': max(speedups),
+        'min': min(speedups)
+    }
+
+def categorize_benchmarks(common_benchmarks):
+    """Categorize benchmarks by type."""
+    return {
         'index': [b for b in common_benchmarks if 'index' in b],
         'insert': [b for b in common_benchmarks if 'insert' in b],
         'search': [b for b in common_benchmarks if 'search' in b],
         'scale': [b for b in common_benchmarks if 'scale' in b],
         'batch': [b for b in common_benchmarks if 'batch' in b]
     }
-    
-    report_lines.append("## 📈 Performance by Category")
-    report_lines.append("")
-    
-    for category, benchmarks in categories.items():
-        if not benchmarks:
-            continue
-            
-        category_speedups = []
-        for benchmark in benchmarks:
-            rust_time = rust_times[benchmark]
-            nodejs_time = nodejs_times[benchmark]
-            speedup = calculate_speedup(rust_time, nodejs_time)
-            if speedup != float('inf'):
-                category_speedups.append(speedup)
-        
-        if category_speedups:
-            avg_speedup = sum(category_speedups) / len(category_speedups)
-            report_lines.append(f"**{category.title()} Operations:** {format_speedup(avg_speedup)} average")
-    
-    report_lines.append("")
-    
-    # Performance insights
-    report_lines.append("## 💡 Key Insights")
-    report_lines.append("")
-    
-    # Find best performing operations
-    best_benchmarks = sorted(
+
+def find_best_performers(rust_times, nodejs_times, common_benchmarks):
+    """Find the best performing benchmarks."""
+    return sorted(
         [(b, calculate_speedup(rust_times[b], nodejs_times[b])) for b in common_benchmarks],
         key=lambda x: x[1], reverse=True
     )[:3]
-    
-    report_lines.append("**Top Performance Gains:**")
-    for benchmark, speedup in best_benchmarks:
-        if speedup != float('inf'):
-            report_lines.append(f"- {benchmark}: {format_speedup(speedup)}")
-    
-    report_lines.append("")
-    
-    # Find areas needing improvement (if any)
-    slow_benchmarks = [(b, s) for b, s in best_benchmarks if s < 1.0]
-    if slow_benchmarks:
-        report_lines.append("**Areas for Improvement:**")
-        for benchmark, speedup in slow_benchmarks[:3]:
-            report_lines.append(f"- {benchmark}: {format_speedup(speedup)}")
-        report_lines.append("")
-    
-    # Implementation notes
-    report_lines.append("## 🔧 Implementation Notes")
-    report_lines.append("")
-    report_lines.append("- Rust implementation uses optimized memory-mapped storage and HNSW indexing")
-    report_lines.append("- Node.js results are from vectra-enhanced library")
-    report_lines.append("- All benchmarks use identical test data and parameters")
-    report_lines.append("- Times are averaged across multiple iterations")
-    report_lines.append("")
-    
-    # Save report
-    report_content = "\n".join(report_lines)
-    
-    # Save as markdown
+
+def save_reports(report_data, output_dir):
+    """Save markdown and JSON reports."""
+    markdown_content = generate_markdown_report(report_data)
+    json_content = generate_json_report(report_data)
+
+    # Save markdown report
     report_path = Path(output_dir) / f"performance_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
     with open(report_path, 'w') as f:
-        f.write(report_content)
-    
-    # Also save as JSON for programmatic access
-    json_report = {
+        f.write(markdown_content)
+
+    # Save JSON report
+    json_path = Path(output_dir) / f"performance_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    with open(json_path, 'w') as f:
+        json.dump(json_content, f, indent=2)
+
+    report_data['report_path'] = report_path
+    report_data['json_path'] = json_path
+
+def generate_markdown_report(report_data):
+    """Generate the markdown report content."""
+    lines = []
+
+    # Add header
+    lines.extend(generate_report_header(report_data))
+
+    # Add summary if statistics available
+    if report_data['speedups']:
+        lines.extend(generate_summary_section(report_data))
+
+    # Add detailed results
+    lines.extend(generate_detailed_results(report_data))
+
+    # Add category analysis
+    lines.extend(generate_category_analysis(report_data))
+
+    # Add insights
+    lines.extend(generate_insights_section(report_data))
+
+    # Add implementation notes
+    lines.extend(generate_implementation_notes())
+
+    return "\n".join(lines)
+
+def generate_report_header(report_data):
+    """Generate report header."""
+    return [
+        "# Vectra Performance Comparison Report",
+        "=" * 50,
+        "",
+        f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"**Rust Results:** {report_data['rust_data'].get('timestamp', 'Unknown')}",
+        f"**Node.js Results:** {report_data['nodejs_data'].get('timestamp', 'Unknown')}",
+        ""
+    ]
+
+def generate_summary_section(report_data):
+    """Generate summary statistics section."""
+    stats = report_data['statistics']
+    lines = [
+        "## 📊 Summary",
+        "",
+        f"- **Average Speedup:** {format_speedup(stats['avg'])}",
+        f"- **Best Speedup:** {format_speedup(stats['max'])}",
+        f"- **Worst Speedup:** {format_speedup(stats['min'])}",
+        f"- **Benchmarks Compared:** {len(report_data['common_benchmarks'])}",
+        ""
+    ]
+    return lines
+
+def generate_detailed_results(report_data):
+    """Generate detailed results table."""
+    lines = [
+        "## 🔍 Detailed Results",
+        "",
+        "| Benchmark | Rust | Node.js | Speedup |",
+        "|-----------|------|---------|---------|"]
+
+    sorted_benchmarks = sorted(report_data['common_benchmarks'])
+
+    for benchmark in sorted_benchmarks:
+        rust_time = report_data['rust_times'][benchmark]
+        nodejs_time = report_data['nodejs_times'][benchmark]
+        speedup = calculate_speedup(rust_time, nodejs_time)
+
+        lines.append(f"| {benchmark} | {format_time(rust_time)} | {format_time(nodejs_time)} | {format_speedup(speedup)} |")
+
+    lines.append("")
+    return lines
+
+def generate_category_analysis(report_data):
+    """Generate category performance analysis."""
+    lines = ["## 📈 Performance by Category", ""]
+
+    for category, benchmarks in report_data['categories'].items():
+        if not benchmarks:
+            continue
+
+        category_speedups = []
+        for benchmark in benchmarks:
+            rust_time = report_data['rust_times'][benchmark]
+            nodejs_time = report_data['nodejs_times'][benchmark]
+            speedup = calculate_speedup(rust_time, nodejs_time)
+            if speedup != float('inf'):
+                category_speedups.append(speedup)
+
+        if category_speedups:
+            avg_speedup = sum(category_speedups) / len(category_speedups)
+            lines.append(f"**{category.title()} Operations:** {format_speedup(avg_speedup)} average")
+
+    lines.append("")
+    return lines
+
+def generate_insights_section(report_data):
+    """Generate insights section."""
+    lines = ["## 💡 Key Insights", "", "**Top Performance Gains:**"]
+
+    for benchmark, speedup in report_data['best_benchmarks']:
+        if speedup != float('inf'):
+            lines.append(f"- {benchmark}: {format_speedup(speedup)}")
+
+    lines.append("")
+
+    # Check for areas needing improvement
+    slow_benchmarks = [(b, s) for b, s in report_data['best_benchmarks'] if s < 1.0]
+    if slow_benchmarks:
+        lines.append("**Areas for Improvement:**")
+        for benchmark, speedup in slow_benchmarks[:3]:
+            lines.append(f"- {benchmark}: {format_speedup(speedup)}")
+        lines.append("")
+
+    return lines
+
+def generate_implementation_notes():
+    """Generate implementation notes section."""
+    return [
+        "## 🔧 Implementation Notes",
+        "",
+        "- Rust implementation uses optimized memory-mapped storage and HNSW indexing",
+        "- Node.js results are from vectra-enhanced library",
+        "- All benchmarks use identical test data and parameters",
+        "- Times are averaged across multiple iterations",
+        ""
+    ]
+
+def generate_json_report(report_data):
+    """Generate JSON report content."""
+    stats = report_data['statistics']
+    return {
         'timestamp': datetime.now().isoformat(),
-        'rust_timestamp': rust_data.get('timestamp'),
-        'nodejs_timestamp': nodejs_data.get('timestamp'),
+        'rust_timestamp': report_data['rust_data'].get('timestamp'),
+        'nodejs_timestamp': report_data['nodejs_data'].get('timestamp'),
         'summary': {
-            'average_speedup': avg_speedup if speedups else 0,
-            'max_speedup': max_speedup if speedups else 0,
-            'min_speedup': min_speedup if speedups else 0,
-            'benchmarks_compared': len(common_benchmarks)
+            'average_speedup': stats['avg'],
+            'max_speedup': stats['max'],
+            'min_speedup': stats['min'],
+            'benchmarks_compared': len(report_data['common_benchmarks'])
         },
         'detailed_results': {
             benchmark: {
-                'rust_time': rust_times[benchmark],
-                'nodejs_time': nodejs_times[benchmark],
-                'speedup': calculate_speedup(rust_times[benchmark], nodejs_times[benchmark])
+                'rust_time': report_data['rust_times'][benchmark],
+                'nodejs_time': report_data['nodejs_times'][benchmark],
+                'speedup': calculate_speedup(report_data['rust_times'][benchmark], report_data['nodejs_times'][benchmark])
             }
-            for benchmark in common_benchmarks
+            for benchmark in report_data['common_benchmarks']
         }
     }
-    
-    json_path = Path(output_dir) / f"performance_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    with open(json_path, 'w') as f:
-        json.dump(json_report, f, indent=2)
-    
-    # Print summary to console
+
+def print_summary(report_data):
+    """Print summary to console."""
     print("📊 Performance Comparison Summary")
     print("=" * 40)
-    if speedups:
-        print(f"Average Speedup: {format_speedup(avg_speedup)}")
-        print(f"Best Speedup: {format_speedup(max_speedup)}")
-        print(f"Benchmarks: {len(common_benchmarks)}")
-    print(f"\n📄 Full report saved to: {report_path}")
-    print(f"📄 JSON data saved to: {json_path}")
+
+    if report_data['speedups']:
+        stats = report_data['statistics']
+        print(f"Average Speedup: {format_speedup(stats['avg'])}")
+        print(f"Best Speedup: {format_speedup(stats['max'])}")
+        print(f"Benchmarks: {len(report_data['common_benchmarks'])}")
+
+    print(f"\n📄 Full report saved to: {report_data['report_path']}")
+    print(f"📄 JSON data saved to: {report_data['json_path']}")
 
 def main():
     parser = argparse.ArgumentParser(description='Compare Vectra benchmark results')
