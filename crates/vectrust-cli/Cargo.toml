@@ -12,10 +12,10 @@ name = "vectrust"
 path = "src/main.rs"
 
 [dependencies]
-vectrust-core = { version = "0.1.3", path = "../vectrust-core" }
-vectrust-storage = { version = "0.1.3", path = "../vectrust-storage" }
-vectrust-index = { version = "0.1.3", path = "../vectrust-index" }
-vectrust-query = { version = "0.1.3", path = "../vectrust-query" }
+vectrust-core = { version = "0.1.4", path = "../vectrust-core" }
+vectrust-storage = { version = "0.1.4", path = "../vectrust-storage" }
+vectrust-index = { version = "0.1.4", path = "../vectrust-index" }
+vectrust-query = { version = "0.1.4", path = "../vectrust-query" }
 clap = { version = "4.4", features = ["derive"] }
 tokio.workspace = true
 anyhow.workspace = true

@@ -8,8 +8,8 @@ repository.workspace = true
 description = "HNSW indexing engine for the vectrust vector database"
 
 [dependencies]
-vectrust-core = { version = "0.1.3", path = "../vectrust-core" }
-vectrust-storage = { version = "0.1.3", path = "../vectrust-storage" }
+vectrust-core = { version = "0.1.4", path = "../vectrust-core" }
+vectrust-storage = { version = "0.1.4", path = "../vectrust-storage" }
 ndarray.workspace = true
 nalgebra.workspace = true
 instant-distance.workspace = true

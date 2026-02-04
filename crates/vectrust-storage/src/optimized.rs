@@ -459,6 +459,11 @@ impl StorageBackend for OptimizedStorage {
     }
     
     async fn get_item(&self, id: &Uuid) -> Result<Option<VectorItem>> {
+        // Ensure storage is initialized for read operations
+        if self.db.read().await.is_none() {
+            self.initialize_storage().await?;
+        }
+
         let db_guard = self.db.read().await;
         if let Some(ref db) = *db_guard {
             let metadata_cf = db.cf_handle(METADATA_CF).unwrap();

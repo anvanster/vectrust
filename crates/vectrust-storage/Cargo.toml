@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Storage backends for the vectrust vector database"
 
 [dependencies]
-vectrust-core = { version = "0.1.3", path = "../vectrust-core" }
+vectrust-core = { version = "0.1.4", path = "../vectrust-core" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
