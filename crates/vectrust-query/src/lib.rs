@@ -1,15 +1,15 @@
 pub mod filter;
-pub mod search;
 pub mod hybrid;
+pub mod search;
 
 pub use filter::*;
-pub use search::*;
 pub use hybrid::*;
+pub use search::*;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_query_module_exports() {
         // Test that all modules are properly exported

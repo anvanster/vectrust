@@ -8,7 +8,7 @@ impl Storage {
     pub fn auto_detect(path: &Path, index_name: &str) -> Result<Box<dyn StorageBackend>> {
         let index_path = path.join(index_name);
         let manifest_path = path.join("manifest.json");
-        
+
         if manifest_path.exists() {
             // V2 optimized format
             Ok(Box::new(crate::OptimizedStorage::new(path)?))

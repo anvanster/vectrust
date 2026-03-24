@@ -2,73 +2,87 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum DistanceMetric {
+    #[default]
     Cosine,
     Euclidean,
     DotProduct,
-}
-
-impl Default for DistanceMetric {
-    fn default() -> Self {
-        DistanceMetric::Cosine
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MetadataConfig {
     #[serde(default)]
     pub indexed: Vec<String>,
-    
+
     #[serde(default)]
     pub reserved: Vec<String>,
-    
+
     #[serde(default = "default_max_size")]
     pub max_size: usize,
-    
+
     #[serde(default = "default_dynamic")]
     pub dynamic: bool,
 }
 
-fn default_max_size() -> usize { 1048576 }
-fn default_dynamic() -> bool { true }
+fn default_max_size() -> usize {
+    1048576
+}
+fn default_dynamic() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HnswConfig {
     #[serde(default = "default_m")]
     pub m: usize,
-    
+
     #[serde(default = "default_ef_construction")]
     pub ef_construction: usize,
-    
+
     #[serde(default = "default_ef_search")]
     pub ef_search: usize,
-    
+
     #[serde(default)]
     pub random_seed: Option<u64>,
-    
+
     #[serde(default = "default_max_elements")]
     pub max_elements: usize,
-    
+
     #[serde(default = "default_max_levels")]
     pub max_levels: usize,
-    
+
     #[serde(default = "default_max_connections")]
     pub max_connections: usize,
-    
+
     #[serde(default = "default_max_connections_layer0")]
     pub max_connections_layer0: usize,
-    
+
     #[serde(default)]
     pub distance_metric: DistanceMetric,
 }
 
-fn default_m() -> usize { 16 }
-fn default_ef_construction() -> usize { 200 }
-fn default_ef_search() -> usize { 200 }
-fn default_max_elements() -> usize { 10000 }
-fn default_max_levels() -> usize { 16 }
-fn default_max_connections() -> usize { 16 }
-fn default_max_connections_layer0() -> usize { 32 }
+fn default_m() -> usize {
+    16
+}
+fn default_ef_construction() -> usize {
+    200
+}
+fn default_ef_search() -> usize {
+    200
+}
+fn default_max_elements() -> usize {
+    10000
+}
+fn default_max_levels() -> usize {
+    16
+}
+fn default_max_connections() -> usize {
+    16
+}
+fn default_max_connections_layer0() -> usize {
+    32
+}
 
 impl Default for HnswConfig {
     fn default() -> Self {

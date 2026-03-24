@@ -1,8 +1,8 @@
 // MongoDB-style metadata filtering
 // TODO: Implement metadata filtering
 
-use vectrust_core::*;
 use serde_json::Value;
+use vectrust_core::*;
 
 pub struct MetadataFilter;
 
