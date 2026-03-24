@@ -4,6 +4,8 @@ members = [
     "crates/vectrust-storage",
     "crates/vectrust-index",
     "crates/vectrust-query",
+    "crates/vectrust-cypher",
+    "crates/vectrust-graph",
     "crates/vectrust",
     "crates/vectrust-cli",
     "examples",
@@ -45,6 +47,9 @@ nalgebra = "0.32"
 
 # Index - using more common crates
 instant-distance = "0.6"
+
+# Parsing
+logos = "0.14"
 
 # Testing
 criterion = { version = "0.5", features = ["html_reports"] }

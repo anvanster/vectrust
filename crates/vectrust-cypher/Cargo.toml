@@ -1,0 +1,15 @@
+[package]
+name = "vectrust-cypher"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cypher query language parser for the vectrust graph+vector database"
+
+[dependencies]
+logos.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

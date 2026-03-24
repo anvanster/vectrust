@@ -1,0 +1,23 @@
+[package]
+name = "vectrust-graph"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Graph storage, query planning, and execution for the vectrust graph+vector database"
+
+[dependencies]
+vectrust-core = { version = "0.1.4", path = "../vectrust-core" }
+vectrust-cypher = { version = "0.1.4", path = "../vectrust-cypher" }
+rocksdb.workspace = true
+bincode.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid = { version = "1.6", features = ["v4", "serde"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["full", "macros", "rt-multi-thread"] }

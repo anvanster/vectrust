@@ -5,6 +5,42 @@ All notable changes to Vectrust will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-03-24
+
+### Added
+- **Graph database**: Nodes, edges, properties, labels, and relationship types
+- **Cypher query language**: Hand-written recursive descent parser with logos lexer
+  - Data manipulation: CREATE, SET, DELETE, DETACH DELETE, REMOVE
+  - Reading: MATCH, WHERE, RETURN, ORDER BY, LIMIT, SKIP, WITH
+  - Variable-length paths: `MATCH (a)-[:REL*1..3]->(b)`
+  - Aggregation: count(), collect(), sum(), avg(), min(), max() with automatic grouping
+  - DISTINCT support
+  - CALL...YIELD procedure syntax
+- **Vector extensions to Cypher**: `vector_similarity()`, `vector_distance()` functions
+- **kNN procedure**: `CALL vectrust.nearest('field', $query, k) YIELD node, score`
+- **GraphIndex facade**: Unified API for graph + vector operations
+  - Programmatic: `create_node()`, `create_edge()`, `create_node_with_vector()`
+  - Cypher: `cypher()`, `cypher_with_params()`
+  - Vector: `insert_vector()`, `get_vector()`, `query_vectors()`
+  - Stats: `graph_stats()` returning node/edge counts, labels, relationship types
+- **Shared RocksDB storage**: Single database instance with 11 column families for graph and vector data
+- **Graph storage**: 9 column families (nodes, edges, adjacency lists, label/reltype indexes, node vectors)
+- **Node.js GraphIndex bindings**: `cypher()`, `createNode()`, `createEdge()`, `nodesByLabel()`, etc.
+- **CLI graph commands**: `vectrust graph stats`, `vectrust graph query`, `vectrust graph create`
+- **New crates**: `vectrust-cypher` (parser), `vectrust-graph` (storage + executor)
+- Graph example (`examples/graph.rs`)
+- 19 integration tests for graph functionality
+- 113+ total tests across workspace
+
+### Changed
+- `GraphIndex::open()` now creates a shared RocksDB with all column families
+- README updated with graph + Cypher documentation
+- CLI renamed from `vectra` to `vectrust`
+
+### Backward Compatible
+- `LocalIndex` API unchanged — zero breaking changes for existing vector-only users
+- Existing vector storage format fully compatible
+
 ## [Unreleased]
 
 ### Added

@@ -1,10 +1,10 @@
+use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
-use anyhow::Result;
 
 #[derive(Parser)]
-#[command(name = "vectra")]
-#[command(about = "Vectra index management and migration tool")]
+#[command(name = "vectrust")]
+#[command(about = "Vectrust graph+vector database CLI")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -17,44 +17,90 @@ enum Commands {
     Migrate {
         #[arg(short, long)]
         path: PathBuf,
-        
+
         #[arg(short, long, default_value = "v2")]
         format: String,
-        
+
         #[arg(long)]
         dry_run: bool,
     },
-    
+
     /// Verify index integrity
     Verify {
         #[arg(short, long)]
         path: PathBuf,
     },
-    
+
     /// Benchmark performance
     Bench {
         #[arg(short, long)]
         path: PathBuf,
-        
+
         #[arg(long, default_value = "1000")]
         items: usize,
     },
-    
-    /// Show index statistics
+
+    /// Show index statistics (vector storage)
     Stats {
         #[arg(short, long)]
         path: PathBuf,
+    },
+
+    /// Graph database commands
+    Graph {
+        #[command(subcommand)]
+        command: GraphCommands,
+    },
+}
+
+#[derive(Parser)]
+enum GraphCommands {
+    /// Show graph statistics (node/edge/label counts)
+    Stats {
+        #[arg(short, long)]
+        path: PathBuf,
+    },
+
+    /// Execute a Cypher query
+    Query {
+        #[arg(short, long)]
+        path: PathBuf,
+
+        /// Cypher query string
+        query: String,
+
+        /// Parameters as JSON (e.g., '{"name": "Alice"}')
+        #[arg(long)]
+        params: Option<String>,
+    },
+
+    /// Create a node from the command line
+    Create {
+        #[arg(short, long)]
+        path: PathBuf,
+
+        /// Labels (comma-separated)
+        #[arg(short, long)]
+        labels: String,
+
+        /// Properties as JSON
+        #[arg(long, default_value = "{}")]
+        props: String,
     },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    
+
     let cli = Cli::parse();
-    
+
     match cli.command {
-        Commands::Migrate { path, format, dry_run } => {
+        Commands::Migrate {
+            path,
+            format,
+            dry_run,
+        } => {
             migrate_index(path, format, dry_run).await?;
         }
         Commands::Verify { path } => {
@@ -64,10 +110,148 @@ async fn main() -> Result<()> {
             benchmark_index(path, items).await?;
         }
         Commands::Stats { path } => {
-            show_stats(path).await?;
+            show_vector_stats(path).await?;
+        }
+        Commands::Graph { command } => {
+            handle_graph_command(command)?;
         }
     }
-    
+
+    Ok(())
+}
+
+fn handle_graph_command(command: GraphCommands) -> Result<()> {
+    match command {
+        GraphCommands::Stats { path } => graph_stats(path),
+        GraphCommands::Query {
+            path,
+            query,
+            params,
+        } => graph_query(path, query, params),
+        GraphCommands::Create {
+            path,
+            labels,
+            props,
+        } => graph_create(path, labels, props),
+    }
+}
+
+fn graph_stats(path: PathBuf) -> Result<()> {
+    let db = vectrust::GraphIndex::open(&path)?;
+    let stats = db.graph_stats()?;
+
+    println!("Graph Statistics for {:?}", path);
+    println!("  Nodes: {}", stats.node_count);
+    println!("  Edges: {}", stats.edge_count);
+    println!(
+        "  Vectors: {}",
+        if stats.has_vectors { "yes" } else { "no" }
+    );
+
+    if !stats.labels.is_empty() {
+        println!("  Labels: {}", stats.labels.join(", "));
+    }
+    if !stats.relationship_types.is_empty() {
+        println!(
+            "  Relationship types: {}",
+            stats.relationship_types.join(", ")
+        );
+    }
+
+    Ok(())
+}
+
+fn graph_query(path: PathBuf, query: String, params: Option<String>) -> Result<()> {
+    let db = vectrust::GraphIndex::open(&path)?;
+
+    let result = if let Some(params_str) = params {
+        let params: serde_json::Value = serde_json::from_str(&params_str)?;
+        db.cypher_with_params(&query, params)?
+    } else {
+        db.cypher(&query)?
+    };
+
+    if result.columns.is_empty() {
+        println!(
+            "Query executed successfully ({} rows affected)",
+            result.rows.len()
+        );
+        return Ok(());
+    }
+
+    // Print header
+    println!("{}", result.columns.join(" | "));
+    println!(
+        "{}",
+        "-".repeat(result.columns.iter().map(|c| c.len() + 3).sum::<usize>())
+    );
+
+    // Print rows
+    for row in &result.rows {
+        let values: Vec<String> = result
+            .columns
+            .iter()
+            .map(|col| {
+                row.get(col)
+                    .map(format_graph_value)
+                    .unwrap_or_else(|| "null".to_string())
+            })
+            .collect();
+        println!("{}", values.join(" | "));
+    }
+
+    println!("\n{} row(s)", result.rows.len());
+    Ok(())
+}
+
+fn graph_create(path: PathBuf, labels: String, props: String) -> Result<()> {
+    let db = vectrust::GraphIndex::open(&path)?;
+    let label_list: Vec<&str> = labels.split(',').map(|s| s.trim()).collect();
+    let properties: serde_json::Value = serde_json::from_str(&props)?;
+
+    let node = db.create_node(&label_list, properties)?;
+    println!("Created node {} with labels {:?}", node.id, node.labels);
+
+    Ok(())
+}
+
+fn format_graph_value(val: &vectrust::GraphValue) -> String {
+    match val {
+        vectrust::GraphValue::Null => "null".to_string(),
+        vectrust::GraphValue::Bool(b) => b.to_string(),
+        vectrust::GraphValue::Integer(n) => n.to_string(),
+        vectrust::GraphValue::Float(f) => format!("{:.4}", f),
+        vectrust::GraphValue::String(s) => format!("\"{}\"", s),
+        vectrust::GraphValue::Node(n) => {
+            format!("({}:{})", &n.id.to_string()[..8], n.labels.join(":"))
+        }
+        vectrust::GraphValue::Edge(e) => format!("[{}:{}]", &e.id.to_string()[..8], e.rel_type),
+        vectrust::GraphValue::List(items) => {
+            let inner: Vec<String> = items.iter().map(format_graph_value).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        vectrust::GraphValue::Map(m) => {
+            let inner: Vec<String> = m
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, format_graph_value(v)))
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+        vectrust::GraphValue::Path(_) => "<path>".to_string(),
+    }
+}
+
+async fn show_vector_stats(path: PathBuf) -> Result<()> {
+    let index = vectrust::LocalIndex::new(&path, None)?;
+    if !index.is_index_created().await {
+        println!("No vector index found at {:?}", path);
+        return Ok(());
+    }
+    let stats = index.get_stats().await?;
+    println!("Vector Index Statistics for {:?}", path);
+    println!("  Items: {}", stats.items);
+    println!("  Dimensions: {:?}", stats.dimensions);
+    println!("  Distance metric: {:?}", stats.distance_metric);
     Ok(())
 }
 
@@ -92,37 +276,69 @@ async fn benchmark_index(path: PathBuf, items: usize) -> Result<()> {
     Ok(())
 }
 
-async fn show_stats(path: PathBuf) -> Result<()> {
-    println!("Statistics for index at {:?}", path);
-    // TODO: Implement stats logic
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_migrate_function() {
         let path = PathBuf::from("/tmp/test");
         let result = migrate_index(path, "v2".to_string(), true).await;
         assert!(result.is_ok());
     }
-    
+
     #[tokio::test]
     async fn test_verify_function() {
         let path = PathBuf::from("/tmp/test");
         let result = verify_index(path).await;
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_cli_parsing() {
-        // Test that CLI parsing works correctly
         use clap::Parser;
-        
-        let args = vec!["vectra", "stats", "--path", "/tmp/test"];
+
+        let args = vec!["vectrust", "stats", "--path", "/tmp/test"];
         let cli = Cli::try_parse_from(args);
         assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_graph_cli_parsing() {
+        use clap::Parser;
+
+        let args = vec![
+            "vectrust",
+            "graph",
+            "query",
+            "--path",
+            "/tmp/test",
+            "MATCH (n) RETURN n",
+        ];
+        let cli = Cli::try_parse_from(args);
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_graph_stats_cli_parsing() {
+        use clap::Parser;
+
+        let args = vec!["vectrust", "graph", "stats", "--path", "/tmp/test"];
+        let cli = Cli::try_parse_from(args);
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_graph_query_execution() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = vectrust::GraphIndex::open(dir.path()).unwrap();
+        db.cypher("CREATE (n:Person {name: 'Alice'})").unwrap();
+
+        let result = db.cypher("MATCH (n:Person) RETURN n.name AS name").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].get("name"),
+            Some(&vectrust::GraphValue::String("Alice".into()))
+        );
     }
 }

@@ -12,6 +12,9 @@ vectrust-core = { version = "0.1.4", path = "../vectrust-core" }
 vectrust-storage = { version = "0.1.4", path = "../vectrust-storage" }
 vectrust-index = { version = "0.1.4", path = "../vectrust-index" }
 vectrust-query = { version = "0.1.4", path = "../vectrust-query" }
+vectrust-cypher = { version = "0.1.4", path = "../vectrust-cypher" }
+vectrust-graph = { version = "0.1.4", path = "../vectrust-graph" }
+rocksdb.workspace = true
 tokio = { version = "1.35", features = ["full"] }
 uuid = { version = "1.6", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
