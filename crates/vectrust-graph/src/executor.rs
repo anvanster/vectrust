@@ -3,7 +3,7 @@ use uuid::Uuid;
 use vectrust_core::{GraphNode, GraphQueryResult, GraphValue, Result, ResultRow, VectraError};
 use vectrust_cypher::{
     ArithmeticOp, BooleanOp, CallClause, Clause, ComparisonOp, CreateClause, DeleteClause,
-    Direction, Expression, LimitClause, Literal, MatchClause, OrderByClause, Pattern,
+    Direction, Expression, LimitClause, Literal, MatchClause, MergeClause, OrderByClause, Pattern,
     PatternElement, RemoveClause, ReturnClause, SetClause, SetItem, SkipClause, Statement,
     StringMatchOp, WhereClause,
 };
@@ -77,6 +77,10 @@ impl<'a> GraphExecutor<'a> {
                 }
                 Clause::Call(c) => {
                     rows = self.execute_call(c)?;
+                    has_rows = true;
+                }
+                Clause::Merge(m) => {
+                    rows = self.execute_merge(m, &rows, has_rows)?;
                     has_rows = true;
                 }
             }
@@ -260,6 +264,122 @@ impl<'a> GraphExecutor<'a> {
         Ok(())
     }
 
+    // ─── MERGE ───────────────────────────────────────────────────
+
+    fn execute_merge(
+        &self,
+        clause: &MergeClause,
+        existing_rows: &[ResultRow],
+        has_existing: bool,
+    ) -> Result<Vec<ResultRow>> {
+        // MERGE tries to MATCH the pattern first; if no match, CREATE it.
+        // Only works for single-node patterns in this MVP.
+        let first_element = clause
+            .pattern
+            .elements
+            .first()
+            .ok_or_else(|| VectraError::Graph {
+                message: "Empty MERGE pattern".into(),
+            })?;
+
+        let PatternElement::Node(ref np) = first_element else {
+            return Err(VectraError::Graph {
+                message: "MERGE currently only supports node patterns".into(),
+            });
+        };
+
+        let initial = if has_existing && !existing_rows.is_empty() {
+            existing_rows.to_vec()
+        } else {
+            vec![ResultRow::new()]
+        };
+
+        let mut result_rows = Vec::new();
+
+        for base_row in &initial {
+            // Try to find existing nodes matching the pattern
+            let candidates = self.find_node_candidates(np, base_row)?;
+
+            // Filter by properties if specified
+            let matching: Vec<GraphNode> = if let Some(ref map_lit) = np.properties {
+                let expected_props = self.eval_map_properties(Some(map_lit), base_row)?;
+                candidates
+                    .into_iter()
+                    .filter(|node| {
+                        expected_props
+                            .iter()
+                            .all(|(k, v)| node.properties.get(k).map_or(false, |nv| nv == v))
+                    })
+                    .collect()
+            } else {
+                candidates
+            };
+
+            if matching.is_empty() {
+                // CREATE the node
+                let labels = np.labels.clone();
+                let props = self.eval_map_properties(np.properties.as_ref(), base_row)?;
+                let id = self.storage.create_node(&labels, props)?;
+                let node = self
+                    .storage
+                    .get_node(id)?
+                    .ok_or_else(|| VectraError::Graph {
+                        message: "Failed to read created node".into(),
+                    })?;
+
+                let mut row = base_row.clone();
+                if let Some(ref var) = np.variable {
+                    row.insert(var.clone(), GraphValue::Node(node.clone()));
+                }
+
+                // Apply ON CREATE SET
+                for item in &clause.on_create {
+                    if let SetItem::Property { target, value } = item {
+                        if let Expression::Property { object, key } = target {
+                            if let Expression::Variable(var) = object.as_ref() {
+                                if let Some(node_val) = row.get(var) {
+                                    if let Some(n) = node_val.as_node() {
+                                        let val = self.eval_expr(value, &row)?;
+                                        self.storage.set_node_property(n.id, key, val)?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                result_rows.push(row);
+            } else {
+                // MATCH found — bind and apply ON MATCH SET
+                for node in matching {
+                    let mut row = base_row.clone();
+                    if let Some(ref var) = np.variable {
+                        row.insert(var.clone(), GraphValue::Node(node.clone()));
+                    }
+
+                    for item in &clause.on_match {
+                        if let SetItem::Property { target, value } = item {
+                            if let Expression::Property { object, key } = target {
+                                if let Expression::Variable(var) = object.as_ref() {
+                                    if let Some(node_val) = row.get(var) {
+                                        if let Some(n) = node_val.as_node() {
+                                            let val = self.eval_expr(value, &row)?;
+                                            self.storage.set_node_property(n.id, key, val)?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    result_rows.push(row);
+                }
+            }
+        }
+
+        Ok(result_rows)
+    }
+
     // ─── MATCH ───────────────────────────────────────────────────
 
     fn execute_match(
@@ -271,15 +391,38 @@ impl<'a> GraphExecutor<'a> {
         let mut all_rows = Vec::new();
 
         for pattern in &clause.patterns {
+            // Collect variable names from the pattern for null-filling in OPTIONAL MATCH
+            let pattern_vars = Self::extract_pattern_variables(pattern);
+
             let pattern_rows = if has_existing && !existing_rows.is_empty() {
                 let mut result = Vec::new();
                 for row in existing_rows {
                     let matched = self.match_pattern(pattern, row)?;
-                    result.extend(matched);
+                    if matched.is_empty() && clause.optional {
+                        // OPTIONAL MATCH: keep the row with null bindings
+                        let mut null_row = row.clone();
+                        for var in &pattern_vars {
+                            if !null_row.contains_key(var) {
+                                null_row.insert(var.clone(), GraphValue::Null);
+                            }
+                        }
+                        result.push(null_row);
+                    } else {
+                        result.extend(matched);
+                    }
                 }
                 result
             } else {
-                self.match_pattern(pattern, &ResultRow::new())?
+                let matched = self.match_pattern(pattern, &ResultRow::new())?;
+                if matched.is_empty() && clause.optional {
+                    let mut null_row = ResultRow::new();
+                    for var in &pattern_vars {
+                        null_row.insert(var.clone(), GraphValue::Null);
+                    }
+                    vec![null_row]
+                } else {
+                    matched
+                }
             };
             all_rows = if all_rows.is_empty() {
                 pattern_rows
@@ -298,6 +441,26 @@ impl<'a> GraphExecutor<'a> {
         }
 
         Ok(all_rows)
+    }
+
+    /// Extract variable names from a pattern for null-filling in OPTIONAL MATCH.
+    fn extract_pattern_variables(pattern: &Pattern) -> Vec<String> {
+        let mut vars = Vec::new();
+        for element in &pattern.elements {
+            match element {
+                PatternElement::Node(np) => {
+                    if let Some(ref var) = np.variable {
+                        vars.push(var.clone());
+                    }
+                }
+                PatternElement::Relationship(rp) => {
+                    if let Some(ref var) = rp.variable {
+                        vars.push(var.clone());
+                    }
+                }
+            }
+        }
+        vars
     }
 
     fn match_pattern(
@@ -1084,22 +1247,8 @@ impl<'a> GraphExecutor<'a> {
             None => 10, // default k
         };
 
-        // Brute-force kNN: scan all node vectors and compute similarity
-        let all_vectors = self.storage.all_node_vectors()?;
-        let mut scored: Vec<(Uuid, f32)> = all_vectors
-            .into_iter()
-            .filter_map(|(id, vec)| {
-                if vec.len() == query_vec.len() {
-                    Some((id, cosine_similarity(&vec, &query_vec)))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        // Sort by similarity descending
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(k);
+        // HNSW-accelerated kNN search (index built lazily, cached)
+        let scored = self.storage.nearest_vectors(&query_vec, k)?;
 
         // Build result rows
         let node_var = clause
@@ -2279,5 +2428,135 @@ mod tests {
         // (this is standard SQL/Cypher behavior)
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].get("total"), Some(&GraphValue::Integer(0)));
+    }
+
+    #[test]
+    fn test_merge_create() {
+        let (storage, _dir) = setup();
+
+        // MERGE on non-existent node should create it
+        exec(
+            &storage,
+            "MERGE (n:Function {name: 'main'}) ON CREATE SET n.lang = 'rust'",
+        );
+
+        let result = exec(&storage, "MATCH (n:Function) RETURN n.name, n.lang");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].get("n.name"),
+            Some(&GraphValue::String("main".into()))
+        );
+        assert_eq!(
+            result.rows[0].get("n.lang"),
+            Some(&GraphValue::String("rust".into()))
+        );
+    }
+
+    #[test]
+    fn test_merge_match() {
+        let (storage, _dir) = setup();
+
+        // Create a node first
+        exec(&storage, "CREATE (n:Function {name: 'main', calls: 0})");
+
+        // MERGE should find it and apply ON MATCH SET
+        exec(
+            &storage,
+            "MERGE (n:Function {name: 'main'}) ON MATCH SET n.calls = 1",
+        );
+
+        let result = exec(&storage, "MATCH (n:Function) RETURN n.name, n.calls");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].get("n.calls"), Some(&GraphValue::Integer(1)));
+    }
+
+    #[test]
+    fn test_merge_idempotent() {
+        let (storage, _dir) = setup();
+
+        // MERGE twice should create only one node
+        exec(&storage, "MERGE (n:Function {name: 'main'})");
+        exec(&storage, "MERGE (n:Function {name: 'main'})");
+
+        let result = exec(&storage, "MATCH (n:Function) RETURN count(*) AS total");
+        assert_eq!(result.rows[0].get("total"), Some(&GraphValue::Integer(1)));
+    }
+
+    #[test]
+    fn test_merge_different_props_creates_new() {
+        let (storage, _dir) = setup();
+
+        exec(&storage, "MERGE (n:Function {name: 'main'})");
+        exec(&storage, "MERGE (n:Function {name: 'helper'})");
+
+        let result = exec(&storage, "MATCH (n:Function) RETURN count(*) AS total");
+        assert_eq!(result.rows[0].get("total"), Some(&GraphValue::Integer(2)));
+    }
+
+    #[test]
+    fn test_optional_match_with_results() {
+        let (storage, _dir) = setup();
+
+        exec(&storage, "CREATE (a:Person {name: 'Alice'})");
+        exec(&storage, "CREATE (b:Person {name: 'Bob'})");
+        exec(
+            &storage,
+            "MATCH (a:Person), (b:Person) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)",
+        );
+
+        // OPTIONAL MATCH with results should behave like regular MATCH
+        let result = exec(
+            &storage,
+            "MATCH (a:Person) WHERE a.name = 'Alice' OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name",
+        );
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].get("a.name"),
+            Some(&GraphValue::String("Alice".into()))
+        );
+        assert_eq!(
+            result.rows[0].get("b.name"),
+            Some(&GraphValue::String("Bob".into()))
+        );
+    }
+
+    #[test]
+    fn test_optional_match_no_results() {
+        let (storage, _dir) = setup();
+
+        exec(&storage, "CREATE (a:Person {name: 'Alice'})");
+
+        // OPTIONAL MATCH with no match should produce null bindings
+        let result = exec(
+            &storage,
+            "MATCH (a:Person) WHERE a.name = 'Alice' OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a.name, b",
+        );
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].get("a.name"),
+            Some(&GraphValue::String("Alice".into()))
+        );
+        assert_eq!(result.rows[0].get("b"), Some(&GraphValue::Null));
+    }
+
+    #[test]
+    fn test_optional_match_mixed() {
+        let (storage, _dir) = setup();
+
+        exec(&storage, "CREATE (a:Person {name: 'Alice'})");
+        exec(&storage, "CREATE (b:Person {name: 'Bob'})");
+        exec(&storage, "CREATE (c:Person {name: 'Carol'})");
+        exec(
+            &storage,
+            "MATCH (a:Person), (b:Person) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)",
+        );
+        // Carol has no KNOWS edges
+
+        let result = exec(
+            &storage,
+            "MATCH (a:Person) OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a.name, b ORDER BY a.name",
+        );
+        // Alice -> Bob (1 match), Bob -> null (no outgoing KNOWS), Carol -> null (no outgoing KNOWS)
+        assert_eq!(result.rows.len(), 3);
     }
 }

@@ -1,12 +1,13 @@
-use rocksdb::{ColumnFamilyDescriptor, IteratorMode, Options, DB};
+use rocksdb::{ColumnFamilyDescriptor, IteratorMode, Options, WriteBatch, DB};
 use serde_json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 use vectrust_core::{
-    EdgeRecord, GraphEdge, GraphNode, GraphValue, NodeRecord, Result, VectraError,
+    EdgeRecord, GraphEdge, GraphNode, GraphValue, HnswConfig, NodeRecord, Result, VectraError,
 };
+use vectrust_index::HnswIndex;
 
 // Column family names
 const CF_NODES: &str = "graph_nodes";
@@ -67,6 +68,8 @@ pub struct GraphStorage {
     handle: DbHandle,
     #[allow(dead_code)]
     path: PathBuf,
+    /// Cached HNSW index for accelerated kNN. Built lazily on first query.
+    hnsw_cache: RwLock<Option<HnswIndex>>,
 }
 
 impl GraphStorage {
@@ -81,6 +84,7 @@ impl GraphStorage {
         Ok(Self {
             handle: DbHandle::Owned(db),
             path: db_path,
+            hnsw_cache: RwLock::new(None),
         })
     }
 
@@ -90,6 +94,7 @@ impl GraphStorage {
         Self {
             handle: DbHandle::Shared(db),
             path,
+            hnsw_cache: RwLock::new(None),
         }
     }
 
@@ -210,7 +215,108 @@ impl GraphStorage {
             self.db().put_cf(&cf_label, &idx_key, [])?;
         }
 
+        self.invalidate_hnsw_cache();
         Ok(id)
+    }
+
+    /// Batch-create multiple nodes in a single RocksDB WriteBatch.
+    /// Returns the IDs of the created nodes.
+    pub fn create_nodes_batch(
+        &self,
+        nodes: &[(Vec<String>, HashMap<String, GraphValue>)],
+    ) -> Result<Vec<Uuid>> {
+        let mut batch = WriteBatch::default();
+        let cf_nodes = self.cf(CF_NODES)?;
+        let cf_props = self.cf(CF_NODE_PROPS)?;
+        let cf_label = self.cf(CF_LABEL_IDX)?;
+
+        let mut ids = Vec::with_capacity(nodes.len());
+
+        for (labels, properties) in nodes {
+            let id = Uuid::new_v4();
+            let record = NodeRecord {
+                id,
+                labels: labels.clone(),
+                has_vector: false,
+            };
+
+            let key = node_key(id);
+            let value = bincode::serialize(&record).map_err(|e| VectraError::StorageError {
+                message: e.to_string(),
+            })?;
+            batch.put_cf(cf_nodes, &key, &value);
+
+            if !properties.is_empty() {
+                let props_json = serde_json::to_vec(properties)?;
+                batch.put_cf(cf_props, &key, &props_json);
+            }
+
+            for label in labels {
+                batch.put_cf(cf_label, label_index_key(label, id), []);
+            }
+
+            ids.push(id);
+        }
+
+        self.db()
+            .write(batch)
+            .map_err(|e| VectraError::StorageError {
+                message: e.to_string(),
+            })?;
+
+        Ok(ids)
+    }
+
+    /// Batch-create multiple edges in a single RocksDB WriteBatch.
+    /// Each edge is (source_id, target_id, rel_type, properties).
+    /// Returns the IDs of the created edges.
+    pub fn create_edges_batch(
+        &self,
+        edges: &[(Uuid, Uuid, String, HashMap<String, GraphValue>)],
+    ) -> Result<Vec<Uuid>> {
+        let mut batch = WriteBatch::default();
+        let cf_edges = self.cf(CF_EDGES)?;
+        let cf_props = self.cf(CF_EDGE_PROPS)?;
+        let cf_out = self.cf(CF_ADJ_OUT)?;
+        let cf_in = self.cf(CF_ADJ_IN)?;
+        let cf_reltype = self.cf(CF_RELTYPE_IDX)?;
+
+        let mut ids = Vec::with_capacity(edges.len());
+
+        for (source, target, rel_type, properties) in edges {
+            let id = Uuid::new_v4();
+            let record = EdgeRecord {
+                id,
+                source: *source,
+                target: *target,
+                rel_type: rel_type.clone(),
+            };
+
+            let key = edge_key(id);
+            let value = bincode::serialize(&record).map_err(|e| VectraError::StorageError {
+                message: e.to_string(),
+            })?;
+            batch.put_cf(cf_edges, &key, &value);
+
+            if !properties.is_empty() {
+                let props_json = serde_json::to_vec(properties)?;
+                batch.put_cf(cf_props, &key, &props_json);
+            }
+
+            batch.put_cf(cf_out, adj_out_key(*source, id), target.as_bytes());
+            batch.put_cf(cf_in, adj_in_key(*target, id), source.as_bytes());
+            batch.put_cf(cf_reltype, reltype_index_key(rel_type, id), []);
+
+            ids.push(id);
+        }
+
+        self.db()
+            .write(batch)
+            .map_err(|e| VectraError::StorageError {
+                message: e.to_string(),
+            })?;
+
+        Ok(ids)
     }
 
     /// Get the vector associated with a node, if any.
@@ -227,6 +333,7 @@ impl GraphStorage {
         let cf_vectors = self.cf(CF_NODE_VECTORS)?;
         let vector_bytes = vector_to_bytes(&vector);
         self.db().put_cf(&cf_vectors, node_key(id), &vector_bytes)?;
+        self.invalidate_hnsw_cache();
         Ok(())
     }
 
@@ -252,6 +359,75 @@ impl GraphStorage {
             }
         }
         Ok(results)
+    }
+
+    /// HNSW-accelerated kNN search over node vectors.
+    /// Lazily builds the HNSW index on first call, then caches it.
+    /// Returns (node_id, similarity_score) pairs sorted by descending similarity.
+    pub fn nearest_vectors(&self, query: &[f32], k: usize) -> Result<Vec<(Uuid, f32)>> {
+        // Try to use cached HNSW index
+        {
+            let cache = self.hnsw_cache.read().map_err(|e| VectraError::Lock {
+                message: e.to_string(),
+            })?;
+            if let Some(ref index) = *cache {
+                if !index.is_empty() {
+                    let results = index.search(query, k)?;
+                    // Convert from distance to similarity (for cosine: sim = 1.0 - dist)
+                    return Ok(results
+                        .into_iter()
+                        .map(|(id, dist)| (id, 1.0 - dist))
+                        .collect());
+                }
+            }
+        }
+
+        // Build index from stored vectors
+        self.rebuild_hnsw_index()?;
+
+        // Search again with the newly built index
+        let cache = self.hnsw_cache.read().map_err(|e| VectraError::Lock {
+            message: e.to_string(),
+        })?;
+        if let Some(ref index) = *cache {
+            let results = index.search(query, k)?;
+            Ok(results
+                .into_iter()
+                .map(|(id, dist)| (id, 1.0 - dist))
+                .collect())
+        } else {
+            // No vectors at all
+            Ok(Vec::new())
+        }
+    }
+
+    /// Rebuild the HNSW index from all stored node vectors.
+    fn rebuild_hnsw_index(&self) -> Result<()> {
+        let all_vectors = self.all_node_vectors()?;
+        if all_vectors.is_empty() {
+            return Ok(());
+        }
+
+        let config = HnswConfig::default();
+        let mut index = HnswIndex::new(config)?;
+
+        for (id, vector) in &all_vectors {
+            index.insert(*id, vector)?;
+        }
+
+        let mut cache = self.hnsw_cache.write().map_err(|e| VectraError::Lock {
+            message: e.to_string(),
+        })?;
+        *cache = Some(index);
+
+        Ok(())
+    }
+
+    /// Invalidate the cached HNSW index (call after inserting/removing vectors).
+    fn invalidate_hnsw_cache(&self) {
+        if let Ok(mut cache) = self.hnsw_cache.write() {
+            *cache = None;
+        }
     }
 
     /// Get a node by ID.

@@ -19,6 +19,7 @@ pub enum Clause {
     Skip(SkipClause),
     With(WithClause),
     Call(CallClause),
+    Merge(MergeClause),
 }
 
 // --- Clause types ---
@@ -26,6 +27,7 @@ pub enum Clause {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchClause {
     pub patterns: Vec<Pattern>,
+    pub optional: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -99,6 +101,13 @@ pub struct SkipClause {
 pub struct WithClause {
     pub distinct: bool,
     pub items: Vec<ReturnItem>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeClause {
+    pub pattern: Pattern,
+    pub on_create: Vec<SetItem>,
+    pub on_match: Vec<SetItem>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

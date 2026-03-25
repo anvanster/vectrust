@@ -181,6 +181,37 @@ impl GraphIndex {
         self.storage.expand_out(node_id, &types)
     }
 
+    // ─── Batch operations ─────────────────────────────────────────
+
+    /// Batch-create multiple nodes. Significantly faster than individual creates
+    /// for bulk imports. Returns created node IDs.
+    pub fn create_nodes_batch(&self, nodes: &[(&[&str], serde_json::Value)]) -> Result<Vec<Uuid>> {
+        let batch: Vec<(Vec<String>, HashMap<String, GraphValue>)> = nodes
+            .iter()
+            .map(|(labels, props)| {
+                let labels = labels.iter().map(|s| s.to_string()).collect();
+                let props = json_to_props(props.clone()).unwrap_or_default();
+                (labels, props)
+            })
+            .collect();
+        self.storage.create_nodes_batch(&batch)
+    }
+
+    /// Batch-create multiple edges. Returns created edge IDs.
+    pub fn create_edges_batch(
+        &self,
+        edges: &[(Uuid, Uuid, &str, serde_json::Value)],
+    ) -> Result<Vec<Uuid>> {
+        let batch: Vec<(Uuid, Uuid, String, HashMap<String, GraphValue>)> = edges
+            .iter()
+            .map(|(src, tgt, rel, props)| {
+                let props = json_to_props(props.clone()).unwrap_or_default();
+                (*src, *tgt, rel.to_string(), props)
+            })
+            .collect();
+        self.storage.create_edges_batch(&batch)
+    }
+
     // ─── Stats ────────────────────────────────────────────────────
 
     /// Get graph database statistics.

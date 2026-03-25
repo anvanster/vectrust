@@ -1977,6 +1977,7 @@ dependencies = [
  "uuid",
  "vectrust-core",
  "vectrust-cypher",
+ "vectrust-index",
 ]
 
 [[package]]

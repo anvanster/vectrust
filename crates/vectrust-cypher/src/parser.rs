@@ -59,8 +59,13 @@ impl Parser {
 
     fn parse_clause(&mut self) -> CypherResult<Clause> {
         match self.peek_token() {
-            Some(Token::Match) => self.parse_match(),
+            Some(Token::Match) => self.parse_match_clause(false),
+            Some(Token::Optional) => {
+                self.advance();
+                self.parse_match_clause(true)
+            }
             Some(Token::Create) => self.parse_create(),
+            Some(Token::Merge) => self.parse_merge(),
             Some(Token::Return) => self.parse_return(),
             Some(Token::Where) => self.parse_where(),
             Some(Token::Set) => self.parse_set(),
@@ -83,16 +88,74 @@ impl Parser {
         }
     }
 
-    fn parse_match(&mut self) -> CypherResult<Clause> {
+    fn parse_match_clause(&mut self, optional: bool) -> CypherResult<Clause> {
         self.expect_token(&Token::Match)?;
         let patterns = self.parse_pattern_list()?;
-        Ok(Clause::Match(MatchClause { patterns }))
+        Ok(Clause::Match(MatchClause { patterns, optional }))
     }
 
     fn parse_create(&mut self) -> CypherResult<Clause> {
         self.expect_token(&Token::Create)?;
         let patterns = self.parse_pattern_list()?;
         Ok(Clause::Create(CreateClause { patterns }))
+    }
+
+    fn parse_merge(&mut self) -> CypherResult<Clause> {
+        self.expect_token(&Token::Merge)?;
+        let pattern = self.parse_pattern()?;
+
+        let mut on_create = Vec::new();
+        let mut on_match = Vec::new();
+
+        // Parse optional ON CREATE SET / ON MATCH SET
+        while self.eat_if(&Token::On) {
+            match self.peek_token() {
+                Some(Token::Create) => {
+                    self.advance();
+                    self.expect_token(&Token::Set)?;
+                    loop {
+                        let target = self.parse_postfix()?;
+                        self.expect_token(&Token::Eq)?;
+                        let value = self.parse_expression()?;
+                        on_create.push(SetItem::Property { target, value });
+                        if !self.eat_if(&Token::Comma) {
+                            break;
+                        }
+                    }
+                }
+                Some(Token::Match) => {
+                    self.advance();
+                    self.expect_token(&Token::Set)?;
+                    loop {
+                        let target = self.parse_postfix()?;
+                        self.expect_token(&Token::Eq)?;
+                        let value = self.parse_expression()?;
+                        on_match.push(SetItem::Property { target, value });
+                        if !self.eat_if(&Token::Comma) {
+                            break;
+                        }
+                    }
+                }
+                Some(other) => {
+                    return Err(CypherError::UnexpectedToken {
+                        position: self.current_position(),
+                        expected: "CREATE or MATCH after ON".into(),
+                        found: other.to_string(),
+                    });
+                }
+                None => {
+                    return Err(CypherError::UnexpectedEof {
+                        expected: "CREATE or MATCH after ON".into(),
+                    });
+                }
+            }
+        }
+
+        Ok(Clause::Merge(MergeClause {
+            pattern,
+            on_create,
+            on_match,
+        }))
     }
 
     fn parse_return(&mut self) -> CypherResult<Clause> {

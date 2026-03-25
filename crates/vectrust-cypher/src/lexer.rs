@@ -8,6 +8,10 @@ pub enum Token {
     // Keywords (case-insensitive)
     #[token("CREATE", ignore(ascii_case))]
     Create,
+    #[token("MERGE", ignore(ascii_case))]
+    Merge,
+    #[token("ON", ignore(ascii_case))]
+    On,
     #[token("MATCH", ignore(ascii_case))]
     Match,
     #[token("RETURN", ignore(ascii_case))]
@@ -22,6 +26,8 @@ pub enum Token {
     Detach,
     #[token("REMOVE", ignore(ascii_case))]
     Remove,
+    #[token("OPTIONAL", ignore(ascii_case))]
+    Optional,
     #[token("ORDER", ignore(ascii_case))]
     Order,
     #[token("BY", ignore(ascii_case))]
@@ -164,6 +170,8 @@ impl std::fmt::Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Token::Create => write!(f, "CREATE"),
+            Token::Merge => write!(f, "MERGE"),
+            Token::On => write!(f, "ON"),
             Token::Match => write!(f, "MATCH"),
             Token::Return => write!(f, "RETURN"),
             Token::Where => write!(f, "WHERE"),
@@ -171,6 +179,7 @@ impl std::fmt::Display for Token {
             Token::Delete => write!(f, "DELETE"),
             Token::Detach => write!(f, "DETACH"),
             Token::Remove => write!(f, "REMOVE"),
+            Token::Optional => write!(f, "OPTIONAL"),
             Token::Order => write!(f, "ORDER"),
             Token::By => write!(f, "BY"),
             Token::Asc => write!(f, "ASC"),
