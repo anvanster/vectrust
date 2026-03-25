@@ -266,6 +266,7 @@ impl<'a> GraphExecutor<'a> {
 
     // ─── MERGE ───────────────────────────────────────────────────
 
+    #[allow(irrefutable_let_patterns)]
     fn execute_merge(
         &self,
         clause: &MergeClause,
@@ -538,7 +539,31 @@ impl<'a> GraphExecutor<'a> {
             }
         }
 
-        // Find nodes by label
+        // Try property index first if pattern has inline properties
+        if let Some(label) = np.labels.first() {
+            if let Some(ref map_lit) = np.properties {
+                for (key, expr) in &map_lit.entries {
+                    if let Ok(value) = self.eval_expr(expr, bindings) {
+                        if let Ok(Some(indexed_ids)) =
+                            self.storage.nodes_by_property(label, key, &value)
+                        {
+                            // Use indexed result
+                            let mut nodes = Vec::new();
+                            for id in indexed_ids {
+                                if let Some(node) = self.storage.get_node(id)? {
+                                    if np.labels.iter().all(|l| node.labels.contains(l)) {
+                                        nodes.push(node);
+                                    }
+                                }
+                            }
+                            return Ok(nodes);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fall back to label scan
         let node_ids = if let Some(label) = np.labels.first() {
             self.storage.nodes_by_label(label)?
         } else {
@@ -548,7 +573,6 @@ impl<'a> GraphExecutor<'a> {
         let mut nodes = Vec::new();
         for id in node_ids {
             if let Some(node) = self.storage.get_node(id)? {
-                // Check all labels match
                 if np.labels.iter().all(|l| node.labels.contains(l)) {
                     nodes.push(node);
                 }

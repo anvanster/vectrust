@@ -212,6 +212,15 @@ impl GraphIndex {
         self.storage.create_edges_batch(&batch)
     }
 
+    // ─── Indexes ──────────────────────────────────────────────────
+
+    /// Create a property index for fast lookups.
+    /// After calling this, `MATCH (n:Label {property: value})` and
+    /// `MERGE (n:Label {property: value})` use O(1) index lookup instead of full scan.
+    pub fn create_property_index(&self, label: &str, property: &str) -> Result<()> {
+        self.storage.create_property_index(label, property)
+    }
+
     // ─── Stats ────────────────────────────────────────────────────
 
     /// Get graph database statistics.
@@ -796,5 +805,74 @@ mod tests {
         assert!(stats.labels.contains(&"Document".to_string()));
         assert_eq!(stats.relationship_types, vec!["KNOWS".to_string()]);
         assert!(stats.has_vectors);
+    }
+
+    #[test]
+    fn test_property_index_speeds_up_merge() {
+        let (db, _dir) = setup();
+
+        // Create index on Function.name
+        db.create_property_index("Function", "name").unwrap();
+
+        // Create 100 nodes
+        for i in 0..100 {
+            db.cypher(&format!("CREATE (n:Function {{name: 'fn_{}'}})", i))
+                .unwrap();
+        }
+
+        // MERGE should use the index for fast lookup
+        let start = std::time::Instant::now();
+        for i in 0..100 {
+            db.cypher(&format!("MERGE (n:Function {{name: 'fn_{}'}})", i))
+                .unwrap();
+        }
+        let merge_time = start.elapsed();
+
+        // Should still have exactly 100 nodes (MERGE found all, didn't create new)
+        let result = db
+            .cypher("MATCH (n:Function) RETURN count(*) AS c")
+            .unwrap();
+        assert_eq!(result.rows[0].get("c"), Some(&GraphValue::Integer(100)));
+
+        // With index, 100 MERGEs should be well under 1 second
+        assert!(
+            merge_time.as_millis() < 2000,
+            "MERGE with index too slow: {}ms",
+            merge_time.as_millis()
+        );
+    }
+
+    #[test]
+    fn test_property_index_used_in_match() {
+        let (db, _dir) = setup();
+
+        // Create many nodes
+        for i in 0..500 {
+            db.cypher(&format!("CREATE (n:Item {{key: 'item_{}'}})", i))
+                .unwrap();
+        }
+
+        // Create index
+        db.create_property_index("Item", "key").unwrap();
+
+        // MATCH with inline properties should use index
+        let start = std::time::Instant::now();
+        let result = db
+            .cypher("MATCH (n:Item {key: 'item_250'}) RETURN n.key AS k")
+            .unwrap();
+        let query_time = start.elapsed();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].get("k"),
+            Some(&GraphValue::String("item_250".into()))
+        );
+
+        // Indexed lookup should be fast
+        assert!(
+            query_time.as_millis() < 50,
+            "Indexed MATCH too slow: {}ms",
+            query_time.as_millis()
+        );
     }
 }

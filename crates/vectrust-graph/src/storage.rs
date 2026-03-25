@@ -19,6 +19,7 @@ const CF_ADJ_IN: &str = "graph_adj_in";
 const CF_LABEL_IDX: &str = "graph_label_idx";
 const CF_RELTYPE_IDX: &str = "graph_reltype_idx";
 const CF_NODE_VECTORS: &str = "graph_node_vectors";
+const CF_PROP_IDX: &str = "graph_prop_idx";
 
 const ALL_CFS: &[&str] = &[
     CF_NODES,
@@ -30,6 +31,7 @@ const ALL_CFS: &[&str] = &[
     CF_LABEL_IDX,
     CF_RELTYPE_IDX,
     CF_NODE_VECTORS,
+    CF_PROP_IDX,
 ];
 
 /// All column families needed for a shared graph+vector database.
@@ -43,6 +45,7 @@ pub const SHARED_CFS: &[&str] = &[
     CF_LABEL_IDX,
     CF_RELTYPE_IDX,
     CF_NODE_VECTORS,
+    CF_PROP_IDX,
     // Vector storage CFs (compatible with OptimizedStorage)
     "metadata",
     "vector_index",
@@ -70,6 +73,8 @@ pub struct GraphStorage {
     path: PathBuf,
     /// Cached HNSW index for accelerated kNN. Built lazily on first query.
     hnsw_cache: RwLock<Option<HnswIndex>>,
+    /// Set of (label, property) pairs that have property indexes.
+    indexed_properties: RwLock<std::collections::HashSet<(String, String)>>,
 }
 
 impl GraphStorage {
@@ -85,6 +90,7 @@ impl GraphStorage {
             handle: DbHandle::Owned(db),
             path: db_path,
             hnsw_cache: RwLock::new(None),
+            indexed_properties: RwLock::new(std::collections::HashSet::new()),
         })
     }
 
@@ -95,6 +101,7 @@ impl GraphStorage {
             handle: DbHandle::Shared(db),
             path,
             hnsw_cache: RwLock::new(None),
+            indexed_properties: RwLock::new(std::collections::HashSet::new()),
         }
     }
 
@@ -171,6 +178,9 @@ impl GraphStorage {
             self.db().put_cf(&cf_label, &idx_key, [])?;
         }
 
+        // Update property indexes
+        self.update_property_indexes(id, labels, &properties)?;
+
         Ok(id)
     }
 
@@ -216,6 +226,7 @@ impl GraphStorage {
         }
 
         self.invalidate_hnsw_cache();
+        self.update_property_indexes(id, labels, &properties)?;
         Ok(id)
     }
 
@@ -493,10 +504,24 @@ impl GraphStorage {
     /// Set a property on a node.
     pub fn set_node_property(&self, id: Uuid, key: &str, value: GraphValue) -> Result<()> {
         let mut props = self.get_node_properties(id)?;
-        props.insert(key.to_string(), value);
+        props.insert(key.to_string(), value.clone());
         let cf_props = self.cf(CF_NODE_PROPS)?;
         let props_json = serde_json::to_vec(&props)?;
         self.db().put_cf(&cf_props, node_key(id), &props_json)?;
+
+        // Update property index if applicable
+        if let Some(node) = self.get_node(id)? {
+            let cf = self.cf(CF_PROP_IDX)?;
+            if let Ok(indexed) = self.indexed_properties.read() {
+                for label in &node.labels {
+                    if indexed.contains(&(label.clone(), key.to_string())) {
+                        let idx_key = prop_index_key(label, key, &value, id);
+                        self.db().put_cf(cf, &idx_key, [])?;
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -855,6 +880,107 @@ impl GraphStorage {
         Ok(iter.next().is_some())
     }
 
+    // ─── Property indexes ─────────────────────────────────────────
+
+    /// Create a property index for fast lookups on (label, property) pairs.
+    /// Scans all existing nodes with the label and indexes the property values.
+    pub fn create_property_index(&self, label: &str, property: &str) -> Result<()> {
+        let cf = self.cf(CF_PROP_IDX)?;
+
+        // Scan all nodes with this label
+        let node_ids = self.nodes_by_label(label)?;
+        for id in node_ids {
+            if let Some(node) = self.get_node(id)? {
+                if let Some(value) = node.properties.get(property) {
+                    let key = prop_index_key(label, property, value, id);
+                    self.db().put_cf(cf, &key, [])?;
+                }
+            }
+        }
+
+        // Register the index
+        if let Ok(mut indexed) = self.indexed_properties.write() {
+            indexed.insert((label.to_string(), property.to_string()));
+        }
+
+        Ok(())
+    }
+
+    /// Check if a property index exists for (label, property).
+    pub fn has_property_index(&self, label: &str, property: &str) -> bool {
+        self.indexed_properties
+            .read()
+            .map(|s| s.contains(&(label.to_string(), property.to_string())))
+            .unwrap_or(false)
+    }
+
+    /// Look up nodes by indexed property value. Returns node IDs.
+    /// Falls back to full scan if no index exists.
+    pub fn nodes_by_property(
+        &self,
+        label: &str,
+        property: &str,
+        value: &GraphValue,
+    ) -> Result<Option<Vec<Uuid>>> {
+        if !self.has_property_index(label, property) {
+            return Ok(None); // No index — caller should fall back to scan
+        }
+
+        let cf = self.cf(CF_PROP_IDX)?;
+        let prefix = prop_index_prefix(label, property, value);
+        let iter = self.db().prefix_iterator_cf(cf, prefix.as_bytes());
+
+        let mut ids = Vec::new();
+        for item in iter {
+            let (key, _) = item.map_err(|e| VectraError::StorageError {
+                message: e.to_string(),
+            })?;
+            let key_str = std::str::from_utf8(&key).map_err(|e| VectraError::StorageError {
+                message: e.to_string(),
+            })?;
+            if !key_str.starts_with(&prefix) {
+                break;
+            }
+            // Key: pi:{label}:{property}:{value_hash}:{uuid}
+            if let Some(uuid_str) = key_str.rsplit(':').next() {
+                if let Ok(uuid) = Uuid::parse_str(uuid_str) {
+                    ids.push(uuid);
+                }
+            }
+        }
+
+        Ok(Some(ids))
+    }
+
+    /// Update property indexes for a node after creation or property change.
+    fn update_property_indexes(
+        &self,
+        node_id: Uuid,
+        labels: &[String],
+        properties: &HashMap<String, GraphValue>,
+    ) -> Result<()> {
+        let indexed = match self.indexed_properties.read() {
+            Ok(s) => s.clone(),
+            Err(_) => return Ok(()),
+        };
+
+        if indexed.is_empty() {
+            return Ok(());
+        }
+
+        let cf = self.cf(CF_PROP_IDX)?;
+        for (idx_label, idx_prop) in &indexed {
+            if labels.contains(idx_label) {
+                if let Some(value) = properties.get(idx_prop) {
+                    let key = prop_index_key(idx_label, idx_prop, value, node_id);
+                    self.db().put_cf(cf, &key, [])?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn scan_edge_ids_by_prefix(
         &self,
         cf: &rocksdb::ColumnFamily,
@@ -914,6 +1040,32 @@ fn label_index_key(label: &str, node: Uuid) -> Vec<u8> {
 
 fn reltype_index_key(rel_type: &str, edge: Uuid) -> Vec<u8> {
     format!("ri:{}:{}", rel_type, edge).into_bytes()
+}
+
+/// Hash a GraphValue to a stable string for use in index keys.
+fn value_hash(value: &GraphValue) -> String {
+    match value {
+        GraphValue::Null => "null".to_string(),
+        GraphValue::Bool(b) => format!("b:{}", b),
+        GraphValue::Integer(n) => format!("i:{}", n),
+        GraphValue::Float(f) => format!("f:{}", f),
+        GraphValue::String(s) => format!("s:{}", s),
+        _ => format!("h:{:x}", {
+            // Simple hash for complex types
+            let bytes = format!("{:?}", value);
+            bytes
+                .bytes()
+                .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
+        }),
+    }
+}
+
+fn prop_index_key(label: &str, property: &str, value: &GraphValue, node: Uuid) -> Vec<u8> {
+    format!("pi:{}:{}:{}:{}", label, property, value_hash(value), node).into_bytes()
+}
+
+fn prop_index_prefix(label: &str, property: &str, value: &GraphValue) -> String {
+    format!("pi:{}:{}:{}:", label, property, value_hash(value))
 }
 
 fn vector_to_bytes(vector: &[f32]) -> Vec<u8> {
