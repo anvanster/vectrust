@@ -16,8 +16,10 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.4", features = ["derive"] }
 indicatif = "0.17"
 anyhow = "1.0"
-rocksdb = "0.21"
+rocksdb = "0.22"
 memmap2 = "0.5"
+fastembed = "4"
+shellexpand = "3"
 
 # Benchmark files would go in benches/ directory
 # [[bench]]
@@ -27,4 +29,8 @@ memmap2 = "0.5"
 [[bin]]
 name = "benchmark_runner"
 path = "src/main.rs"
+
+[[bin]]
+name = "real_world_bench"
+path = "src/real_world.rs"
 
