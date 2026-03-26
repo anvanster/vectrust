@@ -1,5 +1,9 @@
 use logos::Logos;
 
+/// Cypher token types produced by the logos-based lexer.
+///
+/// All keyword tokens are case-insensitive. Whitespace, `//` comments,
+/// and `--` comments are skipped automatically.
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(skip r"[ \t\r\n\f]+")]
 #[logos(skip r"//[^\n]*")]

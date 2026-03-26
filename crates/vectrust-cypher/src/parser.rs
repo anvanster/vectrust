@@ -11,12 +11,16 @@ struct Spanned {
 }
 
 /// Recursive descent parser for a Cypher subset.
+///
+/// Supports: CREATE, MATCH, OPTIONAL MATCH, MERGE, WHERE, RETURN, SET,
+/// DELETE, DETACH DELETE, REMOVE, ORDER BY, LIMIT, SKIP, WITH, CALL...YIELD.
 pub struct Parser {
     tokens: Vec<Spanned>,
     pos: usize,
 }
 
 impl Parser {
+    /// Create a new parser from a Cypher query string.
     pub fn new(input: &str) -> Self {
         let lexer = Token::lexer(input);
         let tokens: Vec<Spanned> = lexer

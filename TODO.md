@@ -21,7 +21,7 @@ Post-v0.2.0 work driven by CodeGraph migration requirements.
 
 ## Migration Support
 
-- [ ] **Migration guide**: Document concrete CodeGraph API → Vectrust mapping.
+- [x] **Migration guide**: `docs/migration-guide.md` — full CodeGraph API → Vectrust mapping with Cypher examples.
 - [x] **Import/Export JSON**: `export_json()` / `import_json()` API + `vectrust graph import/export` CLI. Full roundtrip with vectors.
 - [ ] **Embedding integration**: Optional callback for auto-embedding nodes on creation.
 

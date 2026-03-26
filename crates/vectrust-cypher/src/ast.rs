@@ -1,3 +1,9 @@
+//! Abstract Syntax Tree for a Cypher query subset.
+//!
+//! The AST is produced by the parser and consumed by the executor.
+//! Key types: [`Statement`] contains [`Clause`]s, which reference
+//! [`Pattern`]s (node/edge shapes) and [`Expression`]s (values, comparisons, functions).
+
 /// A complete Cypher statement (one or more clauses).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Statement {

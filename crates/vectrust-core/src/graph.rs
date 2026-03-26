@@ -43,6 +43,7 @@ pub enum GraphValue {
 }
 
 impl GraphValue {
+    /// Returns the value as a string slice, if it is a `String`.
     pub fn as_str(&self) -> Option<&str> {
         match self {
             GraphValue::String(s) => Some(s),
@@ -50,6 +51,7 @@ impl GraphValue {
         }
     }
 
+    /// Returns the value as an `i64`, if it is an `Integer`.
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             GraphValue::Integer(n) => Some(*n),
@@ -57,6 +59,7 @@ impl GraphValue {
         }
     }
 
+    /// Returns the value as an `f64`. Integers are promoted to float.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             GraphValue::Float(f) => Some(*f),
@@ -65,6 +68,7 @@ impl GraphValue {
         }
     }
 
+    /// Returns the value as a `bool`, if it is a `Bool`.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             GraphValue::Bool(b) => Some(*b),
@@ -72,10 +76,12 @@ impl GraphValue {
         }
     }
 
+    /// Returns `true` if the value is `Null`.
     pub fn is_null(&self) -> bool {
         matches!(self, GraphValue::Null)
     }
 
+    /// Returns a reference to the inner `GraphNode`, if this value is a `Node`.
     pub fn as_node(&self) -> Option<&GraphNode> {
         match self {
             GraphValue::Node(n) => Some(n),
@@ -83,6 +89,7 @@ impl GraphValue {
         }
     }
 
+    /// Returns a reference to the inner `GraphEdge`, if this value is an `Edge`.
     pub fn as_edge(&self) -> Option<&GraphEdge> {
         match self {
             GraphValue::Edge(e) => Some(e),
@@ -221,6 +228,7 @@ pub struct GraphQueryResult {
 }
 
 impl GraphQueryResult {
+    /// Create an empty result set with no columns or rows.
     pub fn empty() -> Self {
         Self {
             columns: Vec::new(),

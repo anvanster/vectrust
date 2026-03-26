@@ -11,12 +11,18 @@ use vectrust_cypher::{
 use crate::storage::GraphStorage;
 
 /// Executes Cypher AST against a GraphStorage instance.
+/// Executes Cypher AST statements against a [`GraphStorage`] instance.
+///
+/// Processes clauses sequentially, maintaining a working set of rows
+/// (variable bindings). Supports all MVP Cypher clauses, aggregation,
+/// vector functions, and CALL procedures.
 pub struct GraphExecutor<'a> {
     storage: &'a GraphStorage,
     params: HashMap<String, GraphValue>,
 }
 
 impl<'a> GraphExecutor<'a> {
+    /// Create a new executor with the given storage backend and query parameters.
     pub fn new(storage: &'a GraphStorage, params: HashMap<String, GraphValue>) -> Self {
         Self { storage, params }
     }
