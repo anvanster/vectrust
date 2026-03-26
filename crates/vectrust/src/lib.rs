@@ -1,7 +1,7 @@
 pub use vectrust_core::*;
 
 mod graph_index;
-pub use graph_index::GraphIndex;
+pub use graph_index::{EdgeJson, GraphIndex, GraphJson, NodeJson};
 
 use std::path::Path;
 use std::sync::Arc;

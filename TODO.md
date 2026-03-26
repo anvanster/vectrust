@@ -22,13 +22,13 @@ Post-v0.2.0 work driven by CodeGraph migration requirements.
 ## Migration Support
 
 - [ ] **Migration guide**: Document concrete CodeGraph API → Vectrust mapping.
-- [ ] **Import from JSON**: `vectrust graph import --path ./data --file graph.json`.
+- [x] **Import/Export JSON**: `export_json()` / `import_json()` API + `vectrust graph import/export` CLI. Full roundtrip with vectors.
 - [ ] **Embedding integration**: Optional callback for auto-embedding nodes on creation.
 
 ## Reliability
 
 - [ ] **Write-ahead log**: WAL for crash recovery during bulk imports.
-- [ ] **Index rebuilding**: `vectrust graph reindex --path ./data` CLI command.
+- [x] **Index rebuilding**: `vectrust graph reindex --path ./data` — rebuilds property indexes for all labels.
 
 ## Phase 2 Cypher (nice-to-have)
 

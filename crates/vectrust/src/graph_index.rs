@@ -1,4 +1,5 @@
 use rocksdb::DB;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -6,6 +7,35 @@ use uuid::Uuid;
 use vectrust_core::{
     GraphEdge, GraphNode, GraphQueryResult, GraphStats, GraphValue, Result, VectorOps, VectraError,
 };
+
+/// JSON interchange format for graph import/export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphJson {
+    pub nodes: Vec<NodeJson>,
+    #[serde(default)]
+    pub edges: Vec<EdgeJson>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeJson {
+    #[serde(default = "Uuid::new_v4")]
+    pub id: Uuid,
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub properties: serde_json::Value,
+    #[serde(default)]
+    pub vector: Option<Vec<f32>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeJson {
+    pub source: Uuid,
+    pub target: Uuid,
+    #[serde(rename = "type")]
+    pub rel_type: String,
+    #[serde(default)]
+    pub properties: serde_json::Value,
+}
 use vectrust_cypher::CypherError;
 use vectrust_graph::{GraphExecutor, GraphStorage};
 
@@ -298,6 +328,109 @@ impl GraphIndex {
             relationship_types,
             has_vectors,
         })
+    }
+
+    // ─── Import / Export ──────────────────────────────────────────
+
+    /// Export the entire graph as JSON.
+    pub fn export_json(&self) -> Result<GraphJson> {
+        let all_ids = self.storage.all_nodes()?;
+        let mut nodes = Vec::with_capacity(all_ids.len());
+
+        for id in &all_ids {
+            if let Some(node) = self.storage.get_node(*id)? {
+                let vector = self.storage.get_node_vector(*id)?;
+                let properties = if node.properties.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    let map: serde_json::Map<String, serde_json::Value> = node
+                        .properties
+                        .into_iter()
+                        .map(|(k, v)| (k, serde_json::Value::from(v)))
+                        .collect();
+                    serde_json::Value::Object(map)
+                };
+                nodes.push(NodeJson {
+                    id: node.id,
+                    labels: node.labels,
+                    properties,
+                    vector,
+                });
+            }
+        }
+
+        // Collect all edges by scanning adjacency
+        let mut edges = Vec::new();
+        let stats = self.storage.edge_count()?;
+        if stats > 0 {
+            // Get edges via all nodes' outgoing adjacency
+            for id in &all_ids {
+                let outgoing = self.storage.expand_out(*id, &[])?;
+                for (edge, _) in outgoing {
+                    let properties = if edge.properties.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        let map: serde_json::Map<String, serde_json::Value> = edge
+                            .properties
+                            .into_iter()
+                            .map(|(k, v)| (k, serde_json::Value::from(v)))
+                            .collect();
+                        serde_json::Value::Object(map)
+                    };
+                    edges.push(EdgeJson {
+                        source: edge.source,
+                        target: edge.target,
+                        rel_type: edge.rel_type,
+                        properties,
+                    });
+                }
+            }
+        }
+
+        Ok(GraphJson { nodes, edges })
+    }
+
+    /// Import a graph from JSON. Creates nodes and edges using batch operations.
+    /// Returns (nodes_created, edges_created).
+    pub fn import_json(&self, data: &GraphJson) -> Result<(usize, usize)> {
+        // Map old IDs to new IDs (in case IDs conflict with existing data)
+        let mut id_map: HashMap<Uuid, Uuid> = HashMap::new();
+
+        // Create nodes
+        for node in &data.nodes {
+            let labels: Vec<&str> = node.labels.iter().map(|s| s.as_str()).collect();
+            let props = node.properties.clone();
+
+            let created = if let Some(ref vector) = node.vector {
+                self.create_node_with_vector(&labels, props, vector.clone())?
+            } else {
+                self.create_node(&labels, props)?
+            };
+
+            id_map.insert(node.id, created.id);
+        }
+
+        // Create edges (resolving IDs through the map)
+        let mut edges_created = 0;
+        for edge in &data.edges {
+            let source = id_map
+                .get(&edge.source)
+                .copied()
+                .ok_or_else(|| VectraError::Graph {
+                    message: format!("Import: source node {} not found", edge.source),
+                })?;
+            let target = id_map
+                .get(&edge.target)
+                .copied()
+                .ok_or_else(|| VectraError::Graph {
+                    message: format!("Import: target node {} not found", edge.target),
+                })?;
+
+            self.create_edge(source, target, &edge.rel_type, edge.properties.clone())?;
+            edges_created += 1;
+        }
+
+        Ok((data.nodes.len(), edges_created))
     }
 
     // ─── Vector operations (shared DB) ───────────────────────────
@@ -1051,5 +1184,82 @@ mod tests {
         let result = db.cypher_batch(&refs).unwrap();
 
         assert_eq!(result.rows[0].get("total"), Some(&GraphValue::Integer(50)));
+    }
+
+    #[test]
+    fn test_export_import_roundtrip() {
+        let (db, _dir) = setup();
+
+        // Build a graph
+        let alice = db
+            .create_node(&["Person"], serde_json::json!({"name": "Alice"}))
+            .unwrap();
+        let bob = db
+            .create_node(&["Person"], serde_json::json!({"name": "Bob"}))
+            .unwrap();
+        let doc = db
+            .create_node_with_vector(
+                &["Document"],
+                serde_json::json!({"title": "Paper"}),
+                vec![1.0, 0.0, 0.0],
+            )
+            .unwrap();
+        db.create_edge(alice.id, bob.id, "KNOWS", serde_json::json!({}))
+            .unwrap();
+        db.create_edge(alice.id, doc.id, "AUTHORED", serde_json::json!({}))
+            .unwrap();
+
+        // Export
+        let exported = db.export_json().unwrap();
+        assert_eq!(exported.nodes.len(), 3);
+        assert_eq!(exported.edges.len(), 2);
+
+        // Verify vector was exported
+        let doc_export = exported
+            .nodes
+            .iter()
+            .find(|n| n.labels.contains(&"Document".to_string()))
+            .unwrap();
+        assert!(doc_export.vector.is_some());
+        assert_eq!(doc_export.vector.as_ref().unwrap(), &vec![1.0, 0.0, 0.0]);
+
+        // Import into a fresh database
+        let dir2 = TempDir::new().unwrap();
+        let db2 = GraphIndex::open(dir2.path()).unwrap();
+        let (nodes, edges) = db2.import_json(&exported).unwrap();
+        assert_eq!(nodes, 3);
+        assert_eq!(edges, 2);
+
+        // Verify the imported graph
+        let result = db2
+            .cypher("MATCH (p:Person)-[:KNOWS]->(f:Person) RETURN p.name, f.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+
+        // Verify vector survived roundtrip
+        let result = db2
+            .cypher("MATCH (d:Document) RETURN d.title AS title")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].get("title"),
+            Some(&GraphValue::String("Paper".into()))
+        );
+    }
+
+    #[test]
+    fn test_export_json_serializable() {
+        let (db, _dir) = setup();
+
+        db.cypher("CREATE (n:Test {val: 42})").unwrap();
+        let exported = db.export_json().unwrap();
+
+        // Should serialize to valid JSON
+        let json_str = serde_json::to_string(&exported).unwrap();
+        assert!(json_str.contains("Test"));
+
+        // Should deserialize back
+        let parsed: GraphJson = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed.nodes.len(), 1);
     }
 }

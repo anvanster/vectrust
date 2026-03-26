@@ -87,6 +87,32 @@ enum GraphCommands {
         #[arg(long, default_value = "{}")]
         props: String,
     },
+
+    /// Export graph to JSON file
+    Export {
+        #[arg(short, long)]
+        path: PathBuf,
+
+        /// Output file (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Import graph from JSON file
+    Import {
+        #[arg(short, long)]
+        path: PathBuf,
+
+        /// JSON file to import
+        #[arg(short, long)]
+        file: PathBuf,
+    },
+
+    /// Rebuild all indexes from raw data
+    Reindex {
+        #[arg(short, long)]
+        path: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -133,6 +159,9 @@ fn handle_graph_command(command: GraphCommands) -> Result<()> {
             labels,
             props,
         } => graph_create(path, labels, props),
+        GraphCommands::Export { path, output } => graph_export(path, output),
+        GraphCommands::Import { path, file } => graph_import(path, file),
+        GraphCommands::Reindex { path } => graph_reindex(path),
     }
 }
 
@@ -212,6 +241,66 @@ fn graph_create(path: PathBuf, labels: String, props: String) -> Result<()> {
     let node = db.create_node(&label_list, properties)?;
     println!("Created node {} with labels {:?}", node.id, node.labels);
 
+    Ok(())
+}
+
+fn graph_export(path: PathBuf, output: Option<PathBuf>) -> Result<()> {
+    let db = vectrust::GraphIndex::open(&path)?;
+    let data = db.export_json()?;
+    let json = serde_json::to_string_pretty(&data)?;
+
+    if let Some(output_path) = output {
+        std::fs::write(&output_path, &json)?;
+        println!(
+            "Exported {} nodes, {} edges to {:?}",
+            data.nodes.len(),
+            data.edges.len(),
+            output_path
+        );
+    } else {
+        println!("{}", json);
+    }
+
+    Ok(())
+}
+
+fn graph_import(path: PathBuf, file: PathBuf) -> Result<()> {
+    let json = std::fs::read_to_string(&file)?;
+    let data: vectrust::GraphJson = serde_json::from_str(&json)?;
+
+    let db = vectrust::GraphIndex::open(&path)?;
+    let (nodes, edges) = db.import_json(&data)?;
+
+    println!("Imported {} nodes, {} edges from {:?}", nodes, edges, file);
+    Ok(())
+}
+
+fn graph_reindex(path: PathBuf) -> Result<()> {
+    let db = vectrust::GraphIndex::open(&path)?;
+    let stats = db.graph_stats()?;
+
+    println!("Reindexing {:?}...", path);
+    println!("  Nodes: {}", stats.node_count);
+    println!("  Edges: {}", stats.edge_count);
+
+    // Rebuild property indexes for all labels
+    for label in &stats.labels {
+        // Get all property keys for this label by sampling nodes
+        let nodes = db.nodes_by_label(label)?;
+        let mut prop_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for node in nodes.iter().take(100) {
+            for key in node.properties.keys() {
+                prop_keys.insert(key.clone());
+            }
+        }
+
+        for key in &prop_keys {
+            db.create_property_index(label, key)?;
+            println!("  Indexed :{}({})", label, key);
+        }
+    }
+
+    println!("Reindex complete.");
     Ok(())
 }
 
