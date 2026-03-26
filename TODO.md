@@ -8,7 +8,7 @@ Post-v0.2.0 work driven by CodeGraph migration requirements.
 - [x] **Batch node/edge creation**: `create_nodes_batch()` / `create_edges_batch()` via RocksDB WriteBatch.
 - [x] **Property indexes**: `create_property_index(label, property)` for O(1) WHERE/MERGE lookups.
 - [x] **Benchmark (debug mode)**: 1000 nodes/128d — 84K nodes/sec, 0.83ms cached kNN, 113K edges/sec.
-- [ ] **Release-mode benchmark**: Run at full 6000 nodes/768d scale with `cargo test --release`. Debug benchmark exists.
+- [x] **Release-mode benchmark**: 6000 nodes/768d — 268K nodes/sec, 0.21ms cached kNN, 396K edges/sec, 50ms traversal.
 - [ ] **768d cosine similarity optimization**: Profile `vector_similarity()` at 768 dimensions. Consider SIMD if needed — hot path for 35 MCP tools.
 
 ## API Completeness (needed for migration)
@@ -32,8 +32,8 @@ Post-v0.2.0 work driven by CodeGraph migration requirements.
 
 ## Phase 2 Cypher (nice-to-have)
 
-- [ ] UNWIND, FOREACH
-- [ ] CASE WHEN expressions
+- [x] UNWIND (expand lists into rows)
+- [x] CASE WHEN expressions (searched and simple forms)
 - [ ] UNION
 - [ ] Subqueries, EXISTS
 - [ ] SHORTEST PATH

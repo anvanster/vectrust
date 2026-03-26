@@ -5,7 +5,7 @@ use vectrust_cypher::{
     ArithmeticOp, BooleanOp, CallClause, Clause, ComparisonOp, CreateClause, DeleteClause,
     Direction, Expression, LimitClause, Literal, MatchClause, MergeClause, OrderByClause, Pattern,
     PatternElement, RemoveClause, ReturnClause, SetClause, SetItem, SkipClause, Statement,
-    StringMatchOp, WhereClause,
+    StringMatchOp, UnwindClause, WhereClause,
 };
 
 use crate::storage::GraphStorage;
@@ -87,6 +87,10 @@ impl<'a> GraphExecutor<'a> {
                 }
                 Clause::Merge(m) => {
                     rows = self.execute_merge(m, &rows, has_rows)?;
+                    has_rows = true;
+                }
+                Clause::Unwind(u) => {
+                    rows = self.execute_unwind(u, &rows, has_rows)?;
                     has_rows = true;
                 }
             }
@@ -385,6 +389,42 @@ impl<'a> GraphExecutor<'a> {
         }
 
         Ok(result_rows)
+    }
+
+    // ─── UNWIND ──────────────────────────────────────────────────
+
+    fn execute_unwind(
+        &self,
+        clause: &UnwindClause,
+        existing_rows: &[ResultRow],
+        has_existing: bool,
+    ) -> Result<Vec<ResultRow>> {
+        let input_rows = if has_existing && !existing_rows.is_empty() {
+            existing_rows.to_vec()
+        } else {
+            vec![ResultRow::new()]
+        };
+
+        let mut result = Vec::new();
+        for row in &input_rows {
+            let val = self.eval_expr(&clause.expression, row)?;
+            match val {
+                GraphValue::List(items) => {
+                    for item in items {
+                        let mut new_row = row.clone();
+                        new_row.insert(clause.alias.clone(), item);
+                        result.push(new_row);
+                    }
+                }
+                _ => {
+                    // UNWIND on non-list produces single row
+                    let mut new_row = row.clone();
+                    new_row.insert(clause.alias.clone(), val);
+                    result.push(new_row);
+                }
+            }
+        }
+        Ok(result)
     }
 
     // ─── MATCH ───────────────────────────────────────────────────
@@ -1398,6 +1438,37 @@ impl<'a> GraphExecutor<'a> {
                 Ok(arithmetic(&l, op, &r))
             }
             Expression::Star => Ok(GraphValue::Null), // count(*) handled in eval_function
+            Expression::CaseWhen {
+                operand,
+                when_clauses,
+                else_clause,
+            } => {
+                let operand_val = operand
+                    .as_ref()
+                    .map(|e| self.eval_expr(e, row))
+                    .transpose()?;
+
+                for (condition, result) in when_clauses {
+                    let matches = if let Some(ref op_val) = operand_val {
+                        // Simple CASE: compare operand to each WHEN value
+                        let when_val = self.eval_expr(condition, row)?;
+                        op_val == &when_val
+                    } else {
+                        // Searched CASE: evaluate each WHEN as boolean
+                        let cond_val = self.eval_expr(condition, row)?;
+                        is_truthy(&cond_val)
+                    };
+                    if matches {
+                        return self.eval_expr(result, row);
+                    }
+                }
+
+                // No match — use ELSE or NULL
+                match else_clause {
+                    Some(else_expr) => self.eval_expr(else_expr, row),
+                    None => Ok(GraphValue::Null),
+                }
+            }
         }
     }
 
@@ -2621,5 +2692,104 @@ mod tests {
         // Match by non-existent combo
         let result = exec(&storage, "MATCH (n:Public:Private) RETURN n.name");
         assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn test_unwind_list() {
+        let (storage, _dir) = setup();
+
+        let result = exec(&storage, "UNWIND [1, 2, 3] AS x RETURN x");
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(result.rows[0].get("x"), Some(&GraphValue::Integer(1)));
+        assert_eq!(result.rows[1].get("x"), Some(&GraphValue::Integer(2)));
+        assert_eq!(result.rows[2].get("x"), Some(&GraphValue::Integer(3)));
+    }
+
+    #[test]
+    fn test_unwind_with_create() {
+        let (storage, _dir) = setup();
+
+        // UNWIND a list and create nodes from it
+        exec(
+            &storage,
+            "UNWIND ['Alice', 'Bob', 'Carol'] AS name CREATE (n:Person {name: name})",
+        );
+
+        let result = exec(&storage, "MATCH (n:Person) RETURN n.name ORDER BY n.name");
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(
+            result.rows[0].get("n.name"),
+            Some(&GraphValue::String("Alice".into()))
+        );
+    }
+
+    #[test]
+    fn test_unwind_parameter() {
+        let (storage, _dir) = setup();
+
+        let mut params = HashMap::new();
+        params.insert(
+            "names".to_string(),
+            GraphValue::List(vec![
+                GraphValue::String("Alice".into()),
+                GraphValue::String("Bob".into()),
+            ]),
+        );
+
+        let result = exec_with_params(&storage, "UNWIND $names AS name RETURN name", params);
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_case_when_searched() {
+        let (storage, _dir) = setup();
+
+        exec(&storage, "CREATE (n:Item {val: 10})");
+        exec(&storage, "CREATE (n:Item {val: 50})");
+        exec(&storage, "CREATE (n:Item {val: 90})");
+
+        let result = exec(
+            &storage,
+            "MATCH (n:Item) RETURN n.val, \
+             CASE WHEN n.val < 30 THEN 'low' WHEN n.val < 70 THEN 'mid' ELSE 'high' END AS tier \
+             ORDER BY n.val",
+        );
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(
+            result.rows[0].get("tier"),
+            Some(&GraphValue::String("low".into()))
+        );
+        assert_eq!(
+            result.rows[1].get("tier"),
+            Some(&GraphValue::String("mid".into()))
+        );
+        assert_eq!(
+            result.rows[2].get("tier"),
+            Some(&GraphValue::String("high".into()))
+        );
+    }
+
+    #[test]
+    fn test_case_when_simple() {
+        let (storage, _dir) = setup();
+
+        exec(&storage, "CREATE (n:Item {status: 'active'})");
+        exec(&storage, "CREATE (n:Item {status: 'archived'})");
+
+        let result = exec(
+            &storage,
+            "MATCH (n:Item) RETURN \
+             CASE n.status WHEN 'active' THEN 'yes' WHEN 'archived' THEN 'no' END AS live \
+             ORDER BY live",
+        );
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(
+            result.rows[0].get("live"),
+            Some(&GraphValue::String("no".into()))
+        );
+        assert_eq!(
+            result.rows[1].get("live"),
+            Some(&GraphValue::String("yes".into()))
+        );
     }
 }

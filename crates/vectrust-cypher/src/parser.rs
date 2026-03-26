@@ -80,6 +80,7 @@ impl Parser {
             Some(Token::Limit) => self.parse_limit(),
             Some(Token::Skip) => self.parse_skip(),
             Some(Token::With) => self.parse_with(),
+            Some(Token::Unwind) => self.parse_unwind(),
             Some(Token::Call) => self.parse_call(),
             Some(other) => Err(CypherError::UnexpectedToken {
                 position: self.current_position(),
@@ -256,6 +257,14 @@ impl Parser {
         let distinct = self.eat_if(&Token::Distinct);
         let items = self.parse_return_items()?;
         Ok(Clause::With(WithClause { distinct, items }))
+    }
+
+    fn parse_unwind(&mut self) -> CypherResult<Clause> {
+        self.expect_token(&Token::Unwind)?;
+        let expression = self.parse_expression()?;
+        self.expect_token(&Token::As)?;
+        let alias = self.expect_identifier()?;
+        Ok(Clause::Unwind(UnwindClause { expression, alias }))
     }
 
     fn parse_call(&mut self) -> CypherResult<Clause> {
@@ -740,6 +749,7 @@ impl Parser {
                 self.advance();
                 Ok(Expression::Variable(name))
             }
+            Some(Token::Case) => self.parse_case_when(),
             Some(other) => Err(CypherError::UnexpectedToken {
                 position: self.current_position(),
                 expected: "expression".to_string(),
@@ -749,6 +759,40 @@ impl Parser {
                 expected: "expression".to_string(),
             }),
         }
+    }
+
+    /// Parse CASE WHEN expr THEN expr [WHEN ...] [ELSE expr] END
+    fn parse_case_when(&mut self) -> CypherResult<Expression> {
+        self.expect_token(&Token::Case)?;
+
+        // Check for simple CASE (CASE expr WHEN val THEN ...)
+        let operand = if !self.check(&Token::When) {
+            Some(Box::new(self.parse_expression()?))
+        } else {
+            None
+        };
+
+        let mut when_clauses = Vec::new();
+        while self.eat_if(&Token::When) {
+            let condition = self.parse_expression()?;
+            self.expect_token(&Token::Then)?;
+            let result = self.parse_expression()?;
+            when_clauses.push((condition, result));
+        }
+
+        let else_clause = if self.eat_if(&Token::Else) {
+            Some(Box::new(self.parse_expression()?))
+        } else {
+            None
+        };
+
+        self.expect_token(&Token::End)?;
+
+        Ok(Expression::CaseWhen {
+            operand,
+            when_clauses,
+            else_clause,
+        })
     }
 
     fn parse_map_literal(&mut self) -> CypherResult<MapLiteral> {

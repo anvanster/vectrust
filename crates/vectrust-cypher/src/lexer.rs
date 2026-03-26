@@ -70,6 +70,18 @@ pub enum Token {
     Null,
     #[token("IS", ignore(ascii_case))]
     Is,
+    #[token("UNWIND", ignore(ascii_case))]
+    Unwind,
+    #[token("CASE", ignore(ascii_case))]
+    Case,
+    #[token("WHEN", ignore(ascii_case))]
+    When,
+    #[token("THEN", ignore(ascii_case))]
+    Then,
+    #[token("ELSE", ignore(ascii_case))]
+    Else,
+    #[token("END", ignore(ascii_case))]
+    End,
     #[token("CALL", ignore(ascii_case))]
     Call,
     #[token("YIELD", ignore(ascii_case))]
@@ -175,6 +187,12 @@ impl std::fmt::Display for Token {
         match self {
             Token::Create => write!(f, "CREATE"),
             Token::Merge => write!(f, "MERGE"),
+            Token::Unwind => write!(f, "UNWIND"),
+            Token::Case => write!(f, "CASE"),
+            Token::When => write!(f, "WHEN"),
+            Token::Then => write!(f, "THEN"),
+            Token::Else => write!(f, "ELSE"),
+            Token::End => write!(f, "END"),
             Token::On => write!(f, "ON"),
             Token::Match => write!(f, "MATCH"),
             Token::Return => write!(f, "RETURN"),

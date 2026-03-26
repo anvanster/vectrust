@@ -26,6 +26,7 @@ pub enum Clause {
     With(WithClause),
     Call(CallClause),
     Merge(MergeClause),
+    Unwind(UnwindClause),
 }
 
 // --- Clause types ---
@@ -114,6 +115,13 @@ pub struct MergeClause {
     pub pattern: Pattern,
     pub on_create: Vec<SetItem>,
     pub on_match: Vec<SetItem>,
+}
+
+/// `UNWIND $list AS item` — expands a list into one row per element.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnwindClause {
+    pub expression: Expression,
+    pub alias: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -228,6 +236,12 @@ pub enum Expression {
     },
     /// Star expression (for count(*))
     Star,
+    /// CASE WHEN expr THEN expr [WHEN ...] [ELSE expr] END
+    CaseWhen {
+        operand: Option<Box<Expression>>,
+        when_clauses: Vec<(Expression, Expression)>,
+        else_clause: Option<Box<Expression>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
