@@ -40,6 +40,14 @@ pub struct GraphIndex {
     path: PathBuf,
 }
 
+// GraphIndex must be Send + Sync for concurrent MCP tool access
+const _: () = {
+    fn assert_send_sync<T: Send + Sync>() {}
+    fn check() {
+        assert_send_sync::<GraphIndex>();
+    }
+};
+
 impl GraphIndex {
     /// Open or create a graph + vector database at the given path.
     ///
@@ -88,6 +96,58 @@ impl GraphIndex {
 
         let executor = GraphExecutor::new(&self.storage, params);
         executor.execute(&stmt)
+    }
+
+    /// Execute multiple Cypher statements in sequence.
+    ///
+    /// Each statement runs independently but against the same storage,
+    /// so nodes/edges created by earlier statements are visible to later ones.
+    /// Returns the result of the last statement that has a RETURN clause,
+    /// or an empty result if none do.
+    ///
+    /// ```ignore
+    /// let result = db.cypher_batch(&[
+    ///     "CREATE (a:Person {name: 'Alice'})",
+    ///     "CREATE (b:Person {name: 'Bob'})",
+    ///     "MATCH (a:Person), (b:Person) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)",
+    ///     "MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name",
+    /// ])?;
+    /// ```
+    pub fn cypher_batch(&self, queries: &[&str]) -> Result<GraphQueryResult> {
+        self.cypher_batch_with_params(queries, serde_json::Value::Null)
+    }
+
+    /// Execute multiple Cypher statements with shared parameters.
+    pub fn cypher_batch_with_params(
+        &self,
+        queries: &[&str],
+        params: serde_json::Value,
+    ) -> Result<GraphQueryResult> {
+        let params: HashMap<String, GraphValue> = match params {
+            serde_json::Value::Object(obj) => obj
+                .into_iter()
+                .map(|(k, v)| (k, GraphValue::from(v)))
+                .collect(),
+            serde_json::Value::Null => HashMap::new(),
+            _ => {
+                return Err(VectraError::Cypher {
+                    message: "Parameters must be a JSON object or null".to_string(),
+                });
+            }
+        };
+
+        let mut last_result = GraphQueryResult::empty();
+
+        for query in queries {
+            let stmt = vectrust_cypher::parse(query).map_err(cypher_err)?;
+            let executor = GraphExecutor::new(&self.storage, params.clone());
+            let result = executor.execute(&stmt)?;
+            if !result.columns.is_empty() {
+                last_result = result;
+            }
+        }
+
+        Ok(last_result)
     }
 
     // ─── Programmatic Node API ───────────────────────────────────
@@ -874,5 +934,122 @@ mod tests {
             "Indexed MATCH too slow: {}ms",
             query_time.as_millis()
         );
+    }
+
+    #[test]
+    fn test_concurrent_reads() {
+        let dir = TempDir::new().unwrap();
+        let db = Arc::new(GraphIndex::open(dir.path()).unwrap());
+
+        // Populate
+        for i in 0..100 {
+            db.cypher(&format!("CREATE (n:Item {{val: {}}})", i))
+                .unwrap();
+        }
+
+        // Spawn 10 threads doing concurrent reads
+        let mut handles = Vec::new();
+        for t in 0..10 {
+            let db = Arc::clone(&db);
+            let handle = std::thread::spawn(move || {
+                for _ in 0..10 {
+                    let result = db.cypher("MATCH (n:Item) RETURN count(*) AS c").unwrap();
+                    let count = result.rows[0].get("c").and_then(|v| v.as_i64()).unwrap();
+                    assert_eq!(count, 100, "Thread {} got wrong count: {}", t, count);
+                }
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
+    }
+
+    #[test]
+    fn test_concurrent_reads_and_writes() {
+        let dir = TempDir::new().unwrap();
+        let db = Arc::new(GraphIndex::open(dir.path()).unwrap());
+
+        // Seed with some data
+        for i in 0..50 {
+            db.cypher(&format!("CREATE (n:Base {{val: {}}})", i))
+                .unwrap();
+        }
+
+        // 5 reader threads + 2 writer threads
+        let mut handles = Vec::new();
+
+        for t in 0..5 {
+            let db = Arc::clone(&db);
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..20 {
+                    let result = db.cypher("MATCH (n:Base) RETURN count(*) AS c").unwrap();
+                    let count = result.rows[0].get("c").and_then(|v| v.as_i64()).unwrap();
+                    assert!(count >= 50, "Thread {} saw count {}", t, count);
+                }
+            }));
+        }
+
+        for t in 0..2 {
+            let db = Arc::clone(&db);
+            handles.push(std::thread::spawn(move || {
+                for i in 0..10 {
+                    db.cypher(&format!("CREATE (n:Writer {{t: {}, i: {}}})", t, i))
+                        .unwrap();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
+
+        // All writes should be visible
+        let result = db.cypher("MATCH (n:Writer) RETURN count(*) AS c").unwrap();
+        assert_eq!(
+            result.rows[0].get("c").and_then(|v| v.as_i64()).unwrap(),
+            20
+        );
+    }
+
+    #[test]
+    fn test_cypher_batch() {
+        let (db, _dir) = setup();
+
+        let result = db
+            .cypher_batch(&[
+                "CREATE (a:Person {name: 'Alice'})",
+                "CREATE (b:Person {name: 'Bob'})",
+                "MATCH (a:Person), (b:Person) WHERE a.name = 'Alice' AND b.name = 'Bob' CREATE (a)-[:KNOWS]->(b)",
+                "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name AS from, b.name AS to",
+            ])
+            .unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].get("from"),
+            Some(&GraphValue::String("Alice".into()))
+        );
+        assert_eq!(
+            result.rows[0].get("to"),
+            Some(&GraphValue::String("Bob".into()))
+        );
+    }
+
+    #[test]
+    fn test_cypher_batch_bulk_create() {
+        let (db, _dir) = setup();
+
+        // Simulate CodeGraph bulk indexing: many CREATEs then a query
+        let mut stmts: Vec<String> = (0..50)
+            .map(|i| format!("CREATE (n:Function {{name: 'fn_{}'}})", i))
+            .collect();
+        stmts.push("MATCH (n:Function) RETURN count(*) AS total".to_string());
+
+        let refs: Vec<&str> = stmts.iter().map(|s| s.as_str()).collect();
+        let result = db.cypher_batch(&refs).unwrap();
+
+        assert_eq!(result.rows[0].get("total"), Some(&GraphValue::Integer(50)));
     }
 }

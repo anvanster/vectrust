@@ -2583,4 +2583,37 @@ mod tests {
         // Alice -> Bob (1 match), Bob -> null (no outgoing KNOWS), Carol -> null (no outgoing KNOWS)
         assert_eq!(result.rows.len(), 3);
     }
+
+    #[test]
+    fn test_multi_label_create_and_match() {
+        let (storage, _dir) = setup();
+
+        // Create node with multiple labels
+        exec(&storage, "CREATE (n:Function:Public {name: 'main'})");
+        exec(&storage, "CREATE (n:Function:Private {name: 'helper'})");
+
+        // Match by single label should find both
+        let result = exec(&storage, "MATCH (n:Function) RETURN n.name ORDER BY n.name");
+        assert_eq!(result.rows.len(), 2);
+
+        // Match by specific label should filter
+        let result = exec(&storage, "MATCH (n:Public) RETURN n.name");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].get("n.name"),
+            Some(&GraphValue::String("main".into()))
+        );
+
+        // Match by both labels
+        let result = exec(&storage, "MATCH (n:Function:Public) RETURN n.name");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].get("n.name"),
+            Some(&GraphValue::String("main".into()))
+        );
+
+        // Match by non-existent combo
+        let result = exec(&storage, "MATCH (n:Public:Private) RETURN n.name");
+        assert_eq!(result.rows.len(), 0);
+    }
 }
