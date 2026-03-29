@@ -904,8 +904,37 @@ impl Parser {
                 self.advance();
                 Ok(name)
             }
-            // Allow some keywords to be used as identifiers in property/label position
-            Some(Token::Count | Token::Asc | Token::Desc | Token::Call | Token::Yield) => {
+            // Allow keywords to be used as identifiers in label/relationship/property position.
+            // Neo4j allows this — e.g., [:CONTAINS] is a valid relationship type even though
+            // CONTAINS is a string operator keyword.
+            Some(
+                Token::Count
+                | Token::Asc
+                | Token::Desc
+                | Token::Call
+                | Token::Yield
+                | Token::Contains
+                | Token::Starts
+                | Token::Ends
+                | Token::Is
+                | Token::In
+                | Token::Not
+                | Token::And
+                | Token::Or
+                | Token::On
+                | Token::Merge
+                | Token::Optional
+                | Token::Unwind
+                | Token::Case
+                | Token::When
+                | Token::Then
+                | Token::Else
+                | Token::End
+                | Token::Distinct
+                | Token::Null
+                | Token::True
+                | Token::False,
+            ) => {
                 let tok = self.advance().unwrap();
                 Ok(tok.to_string())
             }

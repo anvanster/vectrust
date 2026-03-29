@@ -529,13 +529,18 @@ impl<'a> GraphExecutor<'a> {
         // Get candidate nodes for the first node
         let candidates = self.find_node_candidates(first_np, initial_bindings)?;
 
+        // For anonymous nodes (no variable), assign an internal name so
+        // expand_and_bind can reference the source node for traversal.
+        let first_var = first_np
+            .variable
+            .clone()
+            .unwrap_or_else(|| "__anon_0".to_string());
+
         let mut current_rows: Vec<ResultRow> = candidates
             .into_iter()
             .map(|node| {
                 let mut row = initial_bindings.clone();
-                if let Some(ref var) = first_np.variable {
-                    row.insert(var.clone(), GraphValue::Node(node));
-                }
+                row.insert(first_var.clone(), GraphValue::Node(node));
                 row
             })
             .collect();
@@ -649,8 +654,15 @@ impl<'a> GraphExecutor<'a> {
     fn get_source_id(&self, row: &ResultRow, prev_element: &PatternElement) -> Result<Uuid> {
         match prev_element {
             PatternElement::Node(np) => {
-                if let Some(ref var) = np.variable {
-                    row.get(var)
+                // Try explicit variable first, then internal __anon_N names
+                let var_name = np.variable.clone().or_else(|| {
+                    // Check for internal anonymous variable names
+                    (0..10)
+                        .map(|i| format!("__anon_{}", i))
+                        .find(|name| row.contains_key(name))
+                });
+                if let Some(var) = var_name {
+                    row.get(&var)
                         .and_then(|v| v.as_node())
                         .map(|n| n.id)
                         .ok_or_else(|| VectraError::Graph {

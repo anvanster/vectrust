@@ -478,29 +478,31 @@ impl StorageBackend for OptimizedStorage {
             self.initialize_storage().await?;
         }
 
-        let db_guard = self.db.read().await;
-        if let Some(ref db) = *db_guard {
-            let metadata_cf = db.cf_handle(METADATA_CF).unwrap();
-            let vector_index_cf = db.cf_handle(VECTOR_INDEX_CF).unwrap();
+        // Read from RocksDB synchronously (cf handles are not Send)
+        let read_result = {
+            let db_guard = self.db.read().await;
+            if let Some(ref db) = *db_guard {
+                let metadata_cf = db.cf_handle(METADATA_CF).unwrap();
+                let vector_index_cf = db.cf_handle(VECTOR_INDEX_CF).unwrap();
+                let id_bytes = id.as_bytes();
 
-            let id_bytes = id.as_bytes();
+                let meta = db.get_cf(&metadata_cf, id_bytes)?;
+                let vrec = db.get_cf(&vector_index_cf, id_bytes)?;
+                Some((meta, vrec))
+            } else {
+                None
+            }
+        };
 
-            // Get metadata
-            if let Some(metadata_bytes) = db.get_cf(metadata_cf, id_bytes)? {
-                let mut item: VectorItem = serde_json::from_slice(&metadata_bytes)?;
+        if let Some((Some(metadata_bytes), Some(vector_record_bytes))) = read_result {
+            let mut item: VectorItem = serde_json::from_slice(&metadata_bytes)?;
+            let vector_record: VectorRecord = bincode::deserialize(&vector_record_bytes)?;
 
-                // Get vector record
-                if let Some(vector_record_bytes) = db.get_cf(vector_index_cf, id_bytes)? {
-                    let vector_record: VectorRecord = bincode::deserialize(&vector_record_bytes)?;
-
-                    if !vector_record.deleted {
-                        // Read vector from memory-mapped file
-                        item.vector = self
-                            .read_vector_from_file(vector_record.offset, vector_record.dimensions)
-                            .await?;
-                        return Ok(Some(item));
-                    }
-                }
+            if !vector_record.deleted {
+                item.vector = self
+                    .read_vector_from_file(vector_record.offset, vector_record.dimensions)
+                    .await?;
+                return Ok(Some(item));
             }
         }
 
@@ -568,35 +570,40 @@ impl StorageBackend for OptimizedStorage {
         let mmap_time = start.elapsed();
 
         // Store metadata and vector record in RocksDB
-        let db_guard = self.db.read().await;
-        if let Some(ref db) = *db_guard {
-            let metadata_cf = db.cf_handle(METADATA_CF).unwrap();
-            let vector_index_cf = db.cf_handle(VECTOR_INDEX_CF).unwrap();
+        // Scoped to drop cf handles (non-Send) before any .await
+        let db_time = {
+            let db_guard = self.db.read().await;
+            if let Some(ref db) = *db_guard {
+                let metadata_cf = db.cf_handle(METADATA_CF).unwrap();
+                let vector_index_cf = db.cf_handle(VECTOR_INDEX_CF).unwrap();
 
-            let id_bytes = item.id.as_bytes();
+                let id_bytes = item.id.as_bytes();
+                let mut metadata_item = item.clone();
+                metadata_item.vector = Vec::new();
+                let metadata_bytes = serde_json::to_vec(&metadata_item)?;
+                let mut write_opts = rocksdb::WriteOptions::default();
+                write_opts.disable_wal(true);
 
-            // Store metadata (without vector data) using JSON to handle serde_json::Value
-            let mut metadata_item = item.clone();
-            metadata_item.vector = Vec::new(); // Don't store vector in metadata
-            let metadata_bytes = serde_json::to_vec(&metadata_item)?;
-            // Use write options for better performance
-            let mut write_opts = rocksdb::WriteOptions::default();
-            write_opts.disable_wal(true); // Disable WAL for better performance
+                let start = std::time::Instant::now();
+                db.put_cf_opt(&metadata_cf, id_bytes, metadata_bytes, &write_opts)?;
 
-            let start = std::time::Instant::now();
-            db.put_cf_opt(metadata_cf, id_bytes, metadata_bytes, &write_opts)?;
+                let vector_record = VectorRecord {
+                    id: item.id,
+                    offset: vector_offset,
+                    dimensions,
+                    deleted: false,
+                };
+                let vector_record_bytes = bincode::serialize(&vector_record)?;
+                db.put_cf_opt(&vector_index_cf, id_bytes, vector_record_bytes, &write_opts)?;
+                start.elapsed()
+            } else {
+                return Err(VectraError::StorageError {
+                    message: "Database not initialized".to_string(),
+                });
+            }
+        };
 
-            // Store vector record
-            let vector_record = VectorRecord {
-                id: item.id,
-                offset: vector_offset,
-                dimensions,
-                deleted: false,
-            };
-            let vector_record_bytes = bincode::serialize(&vector_record)?;
-            db.put_cf_opt(vector_index_cf, id_bytes, vector_record_bytes, &write_opts)?;
-            let db_time = start.elapsed();
-
+        {
             // Update manifest and log timing
             let total_items = {
                 let mut manifest_guard = self.manifest.write().await;
@@ -772,8 +779,8 @@ impl StorageBackend for OptimizedStorage {
                 let mut batch = rocksdb::WriteBatch::default();
 
                 for (id_bytes, metadata_bytes, vector_record_bytes) in prepared_data {
-                    batch.put_cf(metadata_cf, &id_bytes, metadata_bytes);
-                    batch.put_cf(vector_index_cf, &id_bytes, vector_record_bytes);
+                    batch.put_cf(&metadata_cf, &id_bytes, metadata_bytes);
+                    batch.put_cf(&vector_index_cf, &id_bytes, vector_record_bytes);
                 }
 
                 // Execute batch write
@@ -803,25 +810,27 @@ impl StorageBackend for OptimizedStorage {
     }
 
     async fn delete_item(&mut self, id: &Uuid) -> Result<()> {
-        let db_guard = self.db.read().await;
-        if let Some(ref db) = *db_guard {
-            let metadata_cf = db.cf_handle(METADATA_CF).unwrap();
-            let vector_index_cf = db.cf_handle(VECTOR_INDEX_CF).unwrap();
+        // Scope cf handles before any .await (BoundColumnFamily is not Send)
+        {
+            let db_guard = self.db.read().await;
+            if let Some(ref db) = *db_guard {
+                let metadata_cf = db.cf_handle(METADATA_CF).unwrap();
+                let vector_index_cf = db.cf_handle(VECTOR_INDEX_CF).unwrap();
+                let id_bytes = id.as_bytes();
 
-            let id_bytes = id.as_bytes();
-
-            // Mark vector record as deleted (we don't actually remove from file for now)
-            if let Some(vector_record_bytes) = db.get_cf(vector_index_cf, id_bytes)? {
-                let mut vector_record: VectorRecord = bincode::deserialize(&vector_record_bytes)?;
-                vector_record.deleted = true;
-                let updated_bytes = bincode::serialize(&vector_record)?;
-                db.put_cf(vector_index_cf, id_bytes, updated_bytes)?;
+                if let Some(vector_record_bytes) = db.get_cf(&vector_index_cf, id_bytes)? {
+                    let mut vector_record: VectorRecord =
+                        bincode::deserialize(&vector_record_bytes)?;
+                    vector_record.deleted = true;
+                    let updated_bytes = bincode::serialize(&vector_record)?;
+                    db.put_cf(&vector_index_cf, id_bytes, updated_bytes)?;
+                }
+                db.delete_cf(&metadata_cf, id_bytes)?;
             }
+        }
 
-            // Remove metadata
-            db.delete_cf(metadata_cf, id_bytes)?;
-
-            // Update manifest
+        // Update manifest (safe to await now — cf handles are dropped)
+        {
             let should_mark_dirty = {
                 let mut manifest_guard = self.manifest.write().await;
                 if let Some(ref mut manifest) = *manifest_guard {
@@ -836,7 +845,6 @@ impl StorageBackend for OptimizedStorage {
                 }
             };
 
-            // Mark manifest dirty for batched saving if updated
             if should_mark_dirty {
                 self.mark_manifest_dirty().await?;
             }
@@ -859,13 +867,13 @@ impl StorageBackend for OptimizedStorage {
                 let vector_index_cf = db.cf_handle(VECTOR_INDEX_CF).unwrap();
 
                 let mut records = Vec::new();
-                let iter = db.iterator_cf(metadata_cf, rocksdb::IteratorMode::Start);
+                let iter = db.iterator_cf(&metadata_cf, rocksdb::IteratorMode::Start);
 
                 for item in iter {
                     let (key, value) = item?;
 
                     // Check if item is not deleted
-                    if let Some(vector_record_bytes) = db.get_cf(vector_index_cf, &key)? {
+                    if let Some(vector_record_bytes) = db.get_cf(&vector_index_cf, &key)? {
                         let vector_record: VectorRecord =
                             bincode::deserialize(&vector_record_bytes)?;
 

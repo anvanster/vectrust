@@ -255,15 +255,15 @@ impl GraphStorage {
             let value = bincode::serialize(&record).map_err(|e| VectraError::StorageError {
                 message: e.to_string(),
             })?;
-            batch.put_cf(cf_nodes, &key, &value);
+            batch.put_cf(&cf_nodes, &key, &value);
 
             if !properties.is_empty() {
                 let props_json = serde_json::to_vec(properties)?;
-                batch.put_cf(cf_props, &key, &props_json);
+                batch.put_cf(&cf_props, &key, &props_json);
             }
 
             for label in labels {
-                batch.put_cf(cf_label, label_index_key(label, id), []);
+                batch.put_cf(&cf_label, label_index_key(label, id), []);
             }
 
             ids.push(id);
@@ -307,16 +307,16 @@ impl GraphStorage {
             let value = bincode::serialize(&record).map_err(|e| VectraError::StorageError {
                 message: e.to_string(),
             })?;
-            batch.put_cf(cf_edges, &key, &value);
+            batch.put_cf(&cf_edges, &key, &value);
 
             if !properties.is_empty() {
                 let props_json = serde_json::to_vec(properties)?;
-                batch.put_cf(cf_props, &key, &props_json);
+                batch.put_cf(&cf_props, &key, &props_json);
             }
 
-            batch.put_cf(cf_out, adj_out_key(*source, id), target.as_bytes());
-            batch.put_cf(cf_in, adj_in_key(*target, id), source.as_bytes());
-            batch.put_cf(cf_reltype, reltype_index_key(rel_type, id), []);
+            batch.put_cf(&cf_out, adj_out_key(*source, id), target.as_bytes());
+            batch.put_cf(&cf_in, adj_in_key(*target, id), source.as_bytes());
+            batch.put_cf(&cf_reltype, reltype_index_key(rel_type, id), []);
 
             ids.push(id);
         }
@@ -352,7 +352,7 @@ impl GraphStorage {
     /// Used for brute-force kNN when no HNSW index is available.
     pub fn all_node_vectors(&self) -> Result<Vec<(Uuid, Vec<f32>)>> {
         let cf = self.cf(CF_NODE_VECTORS)?;
-        let iter = self.db().iterator_cf(cf, IteratorMode::Start);
+        let iter = self.db().iterator_cf(&cf, IteratorMode::Start);
         let mut results = Vec::new();
         for item in iter {
             let (key, value) = item.map_err(|e| VectraError::StorageError {
@@ -516,7 +516,7 @@ impl GraphStorage {
                 for label in &node.labels {
                     if indexed.contains(&(label.clone(), key.to_string())) {
                         let idx_key = prop_index_key(label, key, &value, id);
-                        self.db().put_cf(cf, &idx_key, [])?;
+                        self.db().put_cf(&cf, &idx_key, [])?;
                     }
                 }
             }
@@ -739,14 +739,14 @@ impl GraphStorage {
     fn get_outgoing_edges(&self, node_id: Uuid) -> Result<Vec<Uuid>> {
         let cf = self.cf(CF_ADJ_OUT)?;
         let prefix = format!("ao:{}:", node_id);
-        self.scan_edge_ids_by_prefix(cf, &prefix)
+        self.scan_edge_ids_by_prefix(&cf, &prefix)
     }
 
     /// Get incoming edge IDs to a node.
     fn get_incoming_edges(&self, node_id: Uuid) -> Result<Vec<Uuid>> {
         let cf = self.cf(CF_ADJ_IN)?;
         let prefix = format!("ai:{}:", node_id);
-        self.scan_edge_ids_by_prefix(cf, &prefix)
+        self.scan_edge_ids_by_prefix(&cf, &prefix)
     }
 
     /// Expand outgoing edges from a node, optionally filtered by relationship type.
@@ -810,7 +810,7 @@ impl GraphStorage {
 
     // ─── Helpers ─────────────────────────────────────────────────
 
-    fn cf(&self, name: &str) -> Result<&rocksdb::ColumnFamily> {
+    fn cf(&self, name: &str) -> Result<std::sync::Arc<rocksdb::BoundColumnFamily>> {
         self.db()
             .cf_handle(name)
             .ok_or_else(|| VectraError::StorageError {
@@ -821,14 +821,14 @@ impl GraphStorage {
     /// Count all edges.
     pub fn edge_count(&self) -> Result<usize> {
         let cf = self.cf(CF_EDGES)?;
-        let iter = self.db().iterator_cf(cf, IteratorMode::Start);
+        let iter = self.db().iterator_cf(&cf, IteratorMode::Start);
         Ok(iter.count())
     }
 
     /// Get all distinct labels.
     pub fn all_labels(&self) -> Result<Vec<String>> {
         let cf = self.cf(CF_LABEL_IDX)?;
-        let iter = self.db().iterator_cf(cf, IteratorMode::Start);
+        let iter = self.db().iterator_cf(&cf, IteratorMode::Start);
         let mut labels = std::collections::HashSet::new();
         for item in iter {
             let (key, _) = item.map_err(|e| VectraError::StorageError {
@@ -852,7 +852,7 @@ impl GraphStorage {
     /// Get all distinct relationship types.
     pub fn all_relationship_types(&self) -> Result<Vec<String>> {
         let cf = self.cf(CF_RELTYPE_IDX)?;
-        let iter = self.db().iterator_cf(cf, IteratorMode::Start);
+        let iter = self.db().iterator_cf(&cf, IteratorMode::Start);
         let mut types = std::collections::HashSet::new();
         for item in iter {
             let (key, _) = item.map_err(|e| VectraError::StorageError {
@@ -876,7 +876,7 @@ impl GraphStorage {
     /// Check if any nodes have vectors.
     pub fn has_vectors(&self) -> Result<bool> {
         let cf = self.cf(CF_NODE_VECTORS)?;
-        let mut iter = self.db().iterator_cf(cf, IteratorMode::Start);
+        let mut iter = self.db().iterator_cf(&cf, IteratorMode::Start);
         Ok(iter.next().is_some())
     }
 
@@ -893,7 +893,7 @@ impl GraphStorage {
             if let Some(node) = self.get_node(id)? {
                 if let Some(value) = node.properties.get(property) {
                     let key = prop_index_key(label, property, value, id);
-                    self.db().put_cf(cf, &key, [])?;
+                    self.db().put_cf(&cf, &key, [])?;
                 }
             }
         }
@@ -928,7 +928,7 @@ impl GraphStorage {
 
         let cf = self.cf(CF_PROP_IDX)?;
         let prefix = prop_index_prefix(label, property, value);
-        let iter = self.db().prefix_iterator_cf(cf, prefix.as_bytes());
+        let iter = self.db().prefix_iterator_cf(&cf, prefix.as_bytes());
 
         let mut ids = Vec::new();
         for item in iter {
@@ -973,7 +973,7 @@ impl GraphStorage {
             if labels.contains(idx_label) {
                 if let Some(value) = properties.get(idx_prop) {
                     let key = prop_index_key(idx_label, idx_prop, value, node_id);
-                    self.db().put_cf(cf, &key, [])?;
+                    self.db().put_cf(&cf, &key, [])?;
                 }
             }
         }
@@ -983,7 +983,7 @@ impl GraphStorage {
 
     fn scan_edge_ids_by_prefix(
         &self,
-        cf: &rocksdb::ColumnFamily,
+        cf: &std::sync::Arc<rocksdb::BoundColumnFamily>,
         prefix: &str,
     ) -> Result<Vec<Uuid>> {
         let iter = self.db().prefix_iterator_cf(cf, prefix.as_bytes());
