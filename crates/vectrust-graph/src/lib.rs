@@ -1,3 +1,6 @@
+// Copyright 2024-2026 Andrey Vasilevsky <anvanster@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+
 //! Graph storage and query execution for vectrust.
 //!
 //! This crate provides [`GraphStorage`] (RocksDB-backed graph with column families

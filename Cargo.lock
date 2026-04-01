@@ -1899,6 +1899,7 @@ version = "0.1.4"
 dependencies = [
  "chrono",
  "rocksdb",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

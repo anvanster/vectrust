@@ -1,3 +1,6 @@
+// Copyright 2024-2026 Andrey Vasilevsky <anvanster@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+
 // Flat (brute-force) index implementation for small datasets
 // TODO: Implement flat index with SIMD optimizations
 

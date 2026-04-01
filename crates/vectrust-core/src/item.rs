@@ -1,3 +1,6 @@
+// Copyright 2024-2026 Andrey Vasilevsky <anvanster@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

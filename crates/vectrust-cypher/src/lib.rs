@@ -1,3 +1,6 @@
+// Copyright 2024-2026 Andrey Vasilevsky <anvanster@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+
 //! Cypher query language parser for vectrust.
 //!
 //! Provides a [`logos`]-based lexer and hand-written recursive descent parser

@@ -1,3 +1,6 @@
+// Copyright 2024-2026 Andrey Vasilevsky <anvanster@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+
 //! Real-world benchmark: index a real codebase with Jina Code V2 embeddings.
 //!
 //! Usage:

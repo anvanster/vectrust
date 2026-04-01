@@ -1,3 +1,6 @@
+// Copyright 2024-2026 Andrey Vasilevsky <anvanster@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+
 //! Abstract Syntax Tree for a Cypher query subset.
 //!
 //! The AST is produced by the parser and consumed by the executor.
